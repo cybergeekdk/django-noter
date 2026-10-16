@@ -1,0 +1,40 @@
+{% comment %}
+  Menupunkter tilføjes i listen nedenfor. `active` sættes ud fra URL-præfikset.
+{% endcomment %}
+{% url 'pages:home' as home_url %}
+{% url 'notes:list' as notes_url %}
+{% url 'pages:about' as about_url %}
+<nav class="navbar navbar-expand-lg bg-body-tertiary border-bottom sticky-top">
+  <div class="container">
+    <a class="navbar-brand fw-semibold" href="{{ home_url }}"><i class="bi bi-journal-text me-1"></i>Django noter</a>
+    <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#mainMenu"
+            aria-controls="mainMenu" aria-expanded="false" aria-label="Vis menu">
+      <span class="navbar-toggler-icon"></span>
+    </button>
+    <div class="collapse navbar-collapse" id="mainMenu">
+      <ul class="navbar-nav me-auto mb-2 mb-lg-0">
+        <li class="nav-item">
+          <a class="nav-link{% if request.path == home_url %} active{% endif %}" href="{{ home_url }}"><i class="bi bi-house me-1"></i>Hjem</a>
+        </li>
+        <li class="nav-item">
+          <a class="nav-link{% if request.path|slice:':7' == notes_url %} active{% endif %}" href="{{ notes_url }}"><i class="bi bi-card-text me-1"></i>Noter</a>
+        </li>
+        <li class="nav-item">
+          <a class="nav-link{% if request.path == about_url %} active{% endif %}" href="{{ about_url }}"><i class="bi bi-info-circle me-1"></i>Om</a>
+        </li>
+      </ul>
+      <ul class="navbar-nav align-items-lg-center gap-lg-2">
+        {% if user.is_staff %}
+          <li class="nav-item">
+            <a class="nav-link" href="{% url 'admin:index' %}"><i class="bi bi-gear me-1"></i>Admin</a>
+          </li>
+        {% endif %}
+        <li class="nav-item">
+          <button type="button" class="btn btn-outline-secondary btn-sm" id="theme-toggle" aria-label="Skift mellem lyst og mørkt tema">
+            <i class="bi bi-moon-stars"></i>
+          </button>
+        </li>
+      </ul>
+    </div>
+  </div>
+</nav>

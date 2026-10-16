@@ -21,6 +21,11 @@
     }
   }
 
+  function showErrors(text) {
+    errorBox.textContent = text;
+    errorBox.classList.toggle("d-none", !text);
+  }
+
   function currentQuery() {
     return searchInput.value.trim();
   }
@@ -53,7 +58,7 @@
 
   noteForm.addEventListener("submit", async (event) => {
     event.preventDefault();
-    errorBox.textContent = "";
+    showErrors("");
     const q = currentQuery();
     const response = await ajax(q ? `?q=${encodeURIComponent(q)}` : location.pathname, {
       method: "POST",
@@ -64,7 +69,7 @@
       list.innerHTML = data.html;
       noteForm.reset();
     } else {
-      errorBox.textContent = Object.values(data.errors).flat().join(" ");
+      showErrors(Object.values(data.errors).flat().join(" "));
     }
   });
 

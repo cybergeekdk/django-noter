@@ -1,12 +1,21 @@
 {% for note in notes %}
-  <div class="note" id="note-{{ note.pk }}">
-    <strong>{{ note.title }}</strong> <small>{{ note.created|date:"j. F Y H:i" }}</small>
-    <p>{{ note.body|linebreaksbr }}</p>
-    <form method="post" action="{% url 'notes:delete' note.pk %}" class="delete-form">
-      {% csrf_token %}
-      <button type="submit">Slet</button>
-    </form>
+  <div class="card note note-card mb-3" id="note-{{ note.pk }}">
+    <div class="card-body">
+      <div class="d-flex justify-content-between align-items-start gap-3">
+        <div>
+          <h5 class="card-title mb-1">{{ note.title }}</h5>
+          <h6 class="card-subtitle text-body-secondary small">{{ note.created|date:"j. F Y H:i" }}</h6>
+        </div>
+        <form method="post" action="{% url 'notes:delete' note.pk %}" class="delete-form">
+          {% csrf_token %}
+          <button type="submit" class="btn btn-sm btn-outline-danger" aria-label="Slet note">
+            <i class="bi bi-trash"></i> Slet
+          </button>
+        </form>
+      </div>
+      {% if note.body %}<p class="card-text note-body mt-2 mb-0">{{ note.body }}</p>{% endif %}
+    </div>
   </div>
 {% empty %}
-  <p>Ingen noter fundet.</p>
+  <div class="alert alert-secondary">Ingen noter fundet.</div>
 {% endfor %}

@@ -17,7 +17,19 @@ python manage.py createsuperuser   # valgfrit, til /admin/
 python manage.py runserver
 ```
 
-Åbn http://127.0.0.1:8000/ — admin ligger på http://127.0.0.1:8000/admin/.
+Åbn http://127.0.0.1:8000/ — noter ligger på `/noter/` og admin på `/admin/`.
+
+## Layout og menu
+
+Sitet bruger Bootstrap 5.3 og Bootstrap Icons, lagt lokalt i `static/vendor/`
+(ingen CDN nødvendig).
+
+- `templates/base.html` er fælles layout. Nye sider arver med `{% extends "base.html" %}`
+  og fylder blokken `content` (evt. `title`, `extra_head`, `extra_js`).
+- `templates/includes/navbar.html` er menuen. Tilføj et punkt ved at kopiere et
+  `<li class="nav-item">` og en `{% url ... as ... %}`-linje øverst.
+- `static/css/site.css` og `static/js/theme.js` er egne styles og lyst/mørkt tema.
+- `pages`-appen har forside og "Om"-side som eksempler.
 
 ## Admin
 

@@ -1,0 +1,8 @@
+/* Projektets egne styles ovenpå Bootstrap. */
+.note-card .note-body { white-space: pre-line; }
+
+/* Loader til AJAX-kald */
+#search-spinner { display: none; }
+body.loading #search-spinner { display: inline-block; }
+body.loading #search-idle { display: none; }
+body.loading #note-list { opacity: .5; transition: opacity .15s; }

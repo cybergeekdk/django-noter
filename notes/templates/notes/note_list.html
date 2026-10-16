@@ -1,46 +1,53 @@
+{% extends "base.html" %}
 {% load static %}
-<!doctype html>
-<html lang="da">
-<head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Noter</title>
-  <style>
-    body { font-family: system-ui, sans-serif; max-width: 640px; margin: 2rem auto; padding: 0 1rem; }
-    form p { margin: .5rem 0; }
-    input, textarea { width: 100%; box-sizing: border-box; }
-    .note { border: 1px solid #ddd; border-radius: 6px; padding: .75rem; margin: .75rem 0; }
-    .note small { color: #666; }
-    .search { margin: 1.5rem 0 .5rem; position: relative; }
-    .errors { color: #b00020; }
-    #loader {
-      display: none; position: absolute; right: .5rem; top: 50%; margin-top: -9px;
-      width: 14px; height: 14px; border: 2px solid #ccc; border-top-color: #333;
-      border-radius: 50%; animation: spin .7s linear infinite;
-    }
-    .loading #loader { display: block; }
-    .loading #note-list { opacity: .5; transition: opacity .15s; }
-    @keyframes spin { to { transform: rotate(360deg); } }
-  </style>
-</head>
-<body>
-  <h1>Noter</h1>
-  <form method="post" id="note-form">
-    {% csrf_token %}
-    {{ form.as_p }}
-    <div class="errors" id="form-errors"></div>
-    <button type="submit">Gem note</button>
-  </form>
 
-  <form method="get" class="search" id="search-form">
-    <input type="search" name="q" value="{{ query }}" placeholder="Søg i noter…" autocomplete="off" aria-label="Søg i noter">
-    <span id="loader" role="status" aria-label="Indlæser"></span>
-  </form>
+{% block title %}Noter{% endblock %}
 
-  <div id="note-list">
-    {% include "notes/_note_list.html" %}
+{% block content %}
+<h1 class="mb-4">Noter</h1>
+
+<div class="row g-4">
+  <div class="col-lg-5">
+    <div class="card">
+      <div class="card-header">Ny note</div>
+      <div class="card-body">
+        <form method="post" id="note-form">
+          {% csrf_token %}
+          <div class="mb-3">
+            <label for="{{ form.title.id_for_label }}" class="form-label">{{ form.title.label }}</label>
+            {{ form.title }}
+          </div>
+          <div class="mb-3">
+            <label for="{{ form.body.id_for_label }}" class="form-label">{{ form.body.label }}</label>
+            {{ form.body }}
+          </div>
+          <div class="alert alert-danger py-2{% if not form.errors %} d-none{% endif %}" id="form-errors" role="alert">
+            {% if form.errors %}{% for errors in form.errors.values %}{{ errors|join:" " }} {% endfor %}{% endif %}
+          </div>
+          <button type="submit" class="btn btn-primary"><i class="bi bi-plus-lg me-1"></i>Gem note</button>
+        </form>
+      </div>
+    </div>
   </div>
 
-  <script src="{% static 'notes/notes.js' %}"></script>
-</body>
-</html>
+  <div class="col-lg-7">
+    <form method="get" id="search-form" class="mb-3">
+      <div class="input-group">
+        <span class="input-group-text"><i class="bi bi-search"></i></span>
+        <input type="search" name="q" value="{{ query }}" class="form-control" placeholder="Søg i noter…"
+               autocomplete="off" aria-label="Søg i noter">
+        <span class="input-group-text">
+          <span id="search-spinner" class="spinner-border spinner-border-sm" role="status" aria-label="Indlæser"></span>
+          <i class="bi bi-check2 text-body-secondary" id="search-idle"></i>
+        </span>
+      </div>
+    </form>
+
+    <div id="note-list">
+      {% include "notes/_note_list.html" %}
+    </div>
+  </div>
+</div>
+{% endblock %}
+
+{% block extra_js %}<script src="{% static 'notes/notes.js' %}"></script>{% endblock %}
