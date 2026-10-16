@@ -31,6 +31,16 @@ Sitet bruger Bootstrap 5.3 og Bootstrap Icons, lagt lokalt i `static/vendor/`
 - `static/css/site.css` og `static/js/theme.js` er egne styles og lyst/mørkt tema.
 - `pages`-appen har forside og "Om"-side som eksempler.
 
+## Login
+
+Menuen har **Log ind** (`/login/`). Når man er logget ind, vises brugernavnet med en
+dropdown med **Log ud** (sendes som POST). Efter login går man tilbage til siden, man
+kom fra (`?next=`), ellers til forsiden. Brugere oprettes i admin eller med
+`python manage.py createsuperuser`. Loginsiden er `templates/registration/login.html`.
+
+Vil du kræve login på en side, så brug `LoginRequiredMixin` (class-based views) eller
+`@login_required` (funktioner).
+
 ## Admin
 
 Admin ligger på `/admin/` og kører på en egen `AdminSite` (`backoffice/sites.py`),

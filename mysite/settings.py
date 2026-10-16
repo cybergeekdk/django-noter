@@ -133,3 +133,8 @@ MAILERS = {
 from django.contrib.messages import constants as message_constants  # noqa: E402
 
 MESSAGE_TAGS = {message_constants.ERROR: "danger"}
+
+# Login/logout via menuen
+LOGIN_URL = "pages:login"
+LOGIN_REDIRECT_URL = "pages:home"
+LOGOUT_REDIRECT_URL = "pages:home"
