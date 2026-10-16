@@ -1,0 +1,12 @@
+{% for note in notes %}
+  <div class="note" id="note-{{ note.pk }}">
+    <strong>{{ note.title }}</strong> <small>{{ note.created|date:"j. F Y H:i" }}</small>
+    <p>{{ note.body|linebreaksbr }}</p>
+    <form method="post" action="{% url 'notes:delete' note.pk %}" class="delete-form">
+      {% csrf_token %}
+      <button type="submit">Slet</button>
+    </form>
+  </div>
+{% empty %}
+  <p>Ingen noter fundet.</p>
+{% endfor %}

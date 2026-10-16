@@ -1,3 +1,4 @@
+{% load static %}
 <!doctype html>
 <html lang="da">
 <head>
@@ -10,27 +11,36 @@
     input, textarea { width: 100%; box-sizing: border-box; }
     .note { border: 1px solid #ddd; border-radius: 6px; padding: .75rem; margin: .75rem 0; }
     .note small { color: #666; }
+    .search { margin: 1.5rem 0 .5rem; position: relative; }
+    .errors { color: #b00020; }
+    #loader {
+      display: none; position: absolute; right: .5rem; top: 50%; margin-top: -9px;
+      width: 14px; height: 14px; border: 2px solid #ccc; border-top-color: #333;
+      border-radius: 50%; animation: spin .7s linear infinite;
+    }
+    .loading #loader { display: block; }
+    .loading #note-list { opacity: .5; transition: opacity .15s; }
+    @keyframes spin { to { transform: rotate(360deg); } }
   </style>
 </head>
 <body>
   <h1>Noter</h1>
-  <form method="post">
+  <form method="post" id="note-form">
     {% csrf_token %}
     {{ form.as_p }}
+    <div class="errors" id="form-errors"></div>
     <button type="submit">Gem note</button>
   </form>
 
-  {% for note in notes %}
-    <div class="note">
-      <strong>{{ note.title }}</strong> <small>{{ note.created|date:"j. F Y H:i" }}</small>
-      <p>{{ note.body|linebreaksbr }}</p>
-      <form method="post" action="{% url 'notes:delete' note.pk %}">
-        {% csrf_token %}
-        <button type="submit">Slet</button>
-      </form>
-    </div>
-  {% empty %}
-    <p>Ingen noter endnu.</p>
-  {% endfor %}
+  <form method="get" class="search" id="search-form">
+    <input type="search" name="q" value="{{ query }}" placeholder="Søg i noter…" autocomplete="off" aria-label="Søg i noter">
+    <span id="loader" role="status" aria-label="Indlæser"></span>
+  </form>
+
+  <div id="note-list">
+    {% include "notes/_note_list.html" %}
+  </div>
+
+  <script src="{% static 'notes/notes.js' %}"></script>
 </body>
 </html>
