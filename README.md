@@ -31,15 +31,30 @@ Sitet bruger Bootstrap 5.3 og Bootstrap Icons, lagt lokalt i `static/vendor/`
 - `static/css/site.css` og `static/js/theme.js` er egne styles og lyst/mørkt tema.
 - `pages`-appen har forside og "Om"-side som eksempler.
 
-## Login
+## Brugere og roller
 
-Menuen har **Log ind** (`/login/`). Når man er logget ind, vises brugernavnet med en
-dropdown med **Log ud** (sendes som POST). Efter login går man tilbage til siden, man
-kom fra (`?next=`), ellers til forsiden. Brugere oprettes i admin eller med
-`python manage.py createsuperuser`. Loginsiden er `templates/registration/login.html`.
+Alt med brugere ligger i `accounts`-appen.
 
-Vil du kræve login på en side, så brug `LoginRequiredMixin` (class-based views) eller
-`@login_required` (funktioner).
+- **Tilmelding** (`/tilmeld/`): alle kan oprette en konto og bliver logget ind med det samme.
+  Nye brugere er altid almindelige brugere.
+- **Login/logout** (`/login/`, `/logout/`): via menuen. Efter login går man tilbage til siden,
+  man kom fra (`?next=`). Logout sendes som POST.
+- **Roller** bygger på Djangos egne felter:
+
+  | Rolle       | Felter                            | Kan                                          |
+  |-------------|-----------------------------------|----------------------------------------------|
+  | Bruger      | `is_superuser=False`              | Bruge sitet                                  |
+  | Super admin | `is_superuser=True`, `is_staff=True` | Alt ovenstående + `/brugere/` + `/admin/` |
+
+- **Brugeradministration** (`/brugere/`, kun super admin): se alle brugere, skifte rolle og
+  slette brugere (med bekræftelsesside). Almindelige brugere får en 403-side.
+  Man kan ikke slette sig selv, og den sidste super admin kan hverken slettes eller
+  gøres til almindelig bruger.
+- Første super admin oprettes med `python manage.py createsuperuser`.
+
+Vil du kræve en rolle på en side, så brug `SuperAdminRequiredMixin` fra
+`accounts/permissions.py` (eller `LoginRequiredMixin` for blot at kræve login).
+Flere roller kan tilføjes med Djangos grupper (`Group`) og rettigheder.
 
 ## Admin
 

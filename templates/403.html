@@ -1,0 +1,12 @@
+{% extends "base.html" %}
+
+{% block title %}Ingen adgang{% endblock %}
+
+{% block content %}
+<div class="text-center py-5">
+  <h1 class="display-4"><i class="bi bi-shield-lock"></i></h1>
+  <h2>Ingen adgang</h2>
+  <p class="text-body-secondary">Du har ikke rettigheder til at se denne side.</p>
+  <a href="{% url 'pages:home' %}" class="btn btn-primary">Til forsiden</a>
+</div>
+{% endblock %}

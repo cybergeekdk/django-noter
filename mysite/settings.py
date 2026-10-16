@@ -37,6 +37,7 @@ INSTALLED_APPS = [
     "django.contrib.sessions",
     "django.contrib.messages",
     "django.contrib.staticfiles",
+    "accounts",
     "pages",
     "notes",
 ]
@@ -135,6 +136,6 @@ from django.contrib.messages import constants as message_constants  # noqa: E402
 MESSAGE_TAGS = {message_constants.ERROR: "danger"}
 
 # Login/logout via menuen
-LOGIN_URL = "pages:login"
+LOGIN_URL = "accounts:login"
 LOGIN_REDIRECT_URL = "pages:home"
 LOGOUT_REDIRECT_URL = "pages:home"

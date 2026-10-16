@@ -1,0 +1,66 @@
+{% extends "base.html" %}
+
+{% block title %}Brugere{% endblock %}
+
+{% block content %}
+<div class="d-flex justify-content-between align-items-center mb-4">
+  <h1 class="mb-0">Brugere</h1>
+  <span class="text-body-secondary">{{ users|length }} i alt</span>
+</div>
+
+<div class="table-responsive">
+  <table class="table table-hover align-middle">
+    <thead>
+      <tr>
+        <th>Bruger</th>
+        <th>E-mail</th>
+        <th>Rolle</th>
+        <th>Oprettet</th>
+        <th>Sidst logget ind</th>
+        <th class="text-end">Handlinger</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for u in users %}
+        <tr>
+          <td>
+            <strong>{{ u.get_username }}</strong>
+            {% if u == request.user %}<span class="badge text-bg-secondary ms-1">dig</span>{% endif %}
+          </td>
+          <td>{{ u.email|default:"–" }}</td>
+          <td>
+            {% if u.is_superuser %}
+              <span class="badge text-bg-danger">Super admin</span>
+            {% else %}
+              <span class="badge text-bg-primary">Bruger</span>
+            {% endif %}
+          </td>
+          <td>{{ u.date_joined|date:"j. F Y" }}</td>
+          <td>{{ u.last_login|date:"j. F Y H:i"|default:"aldrig" }}</td>
+          <td class="text-end text-nowrap">
+            <form method="post" action="{% url 'accounts:user_role' u.pk %}" class="d-inline">
+              {% csrf_token %}
+              {% if u.is_superuser %}
+                <input type="hidden" name="role" value="user">
+                <button type="submit" class="btn btn-sm btn-outline-secondary">
+                  <i class="bi bi-arrow-down-circle me-1"></i>Gør til bruger
+                </button>
+              {% else %}
+                <input type="hidden" name="role" value="superadmin">
+                <button type="submit" class="btn btn-sm btn-outline-secondary">
+                  <i class="bi bi-arrow-up-circle me-1"></i>Gør til super admin
+                </button>
+              {% endif %}
+            </form>
+            <a class="btn btn-sm btn-outline-danger{% if u == request.user %} disabled{% endif %}"
+               href="{% url 'accounts:user_delete' u.pk %}"
+               {% if u == request.user %}aria-disabled="true" tabindex="-1"{% endif %}>
+              <i class="bi bi-trash me-1"></i>Slet
+            </a>
+          </td>
+        </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endblock %}
