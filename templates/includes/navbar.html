@@ -8,6 +8,7 @@
 {% url 'accounts:signup' as signup_url %}
 {% url 'accounts:user_list' as users_url %}
 {% url 'guides:list' as guides_url %}
+{% url 'inventory:list' as inventory_url %}
 <nav class="navbar navbar-expand-lg bg-body-tertiary border-bottom sticky-top">
   <div class="container">
     <a class="navbar-brand fw-semibold" href="{{ home_url }}"><i class="bi bi-journal-text me-1"></i>Django noter</a>
@@ -29,6 +30,9 @@
         {% if user.is_authenticated %}
           <li class="nav-item">
             <a class="nav-link{% if request.path|slice:':8' == guides_url %} active{% endif %}" href="{{ guides_url }}"><i class="bi bi-journal-richtext me-1"></i>Guider</a>
+          </li>
+          <li class="nav-item">
+            <a class="nav-link{% if request.path|slice:':8' == inventory_url %} active{% endif %}" href="{{ inventory_url }}"><i class="bi bi-box-seam me-1"></i>Udstyr</a>
           </li>
         {% endif %}
         {% if user.is_superuser %}

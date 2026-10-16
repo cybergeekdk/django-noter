@@ -41,6 +41,7 @@ INSTALLED_APPS = [
     "pages",
     "notes",
     "guides",
+    "inventory",
 ]
 
 MIDDLEWARE = [

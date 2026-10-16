@@ -1,0 +1,16 @@
+{% if item.warranty_expires_on %}
+  {% with days=item.warranty_days_left %}
+    {% if item.warranty_status == "expired" %}
+      <span class="badge text-bg-danger">Udløbet</span>
+      <div class="small text-body-secondary">{{ item.warranty_expires_on|date:"j. M Y" }}</div>
+    {% elif item.warranty_status == "soon" %}
+      <span class="badge text-bg-warning">{% if days == 0 %}Udløber i dag{% elif days == 1 %}Udløber i morgen{% else %}Udløber om {{ days }} dage{% endif %}</span>
+      <div class="small text-body-secondary">{{ item.warranty_expires_on|date:"j. M Y" }}</div>
+    {% else %}
+      <span class="badge text-bg-success">Garanti OK</span>
+      <div class="small text-body-secondary">til {{ item.warranty_expires_on|date:"j. M Y" }}</div>
+    {% endif %}
+  {% endwith %}
+{% else %}
+  <span class="text-body-secondary">–</span>
+{% endif %}

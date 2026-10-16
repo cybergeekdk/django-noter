@@ -1,0 +1,114 @@
+{% extends "base.html" %}
+
+{% block title %}Udstyr{% endblock %}
+
+{% block content %}
+<div class="d-flex flex-wrap justify-content-between align-items-center gap-2 mb-4">
+  <div>
+    <h1 class="mb-0">Udstyr</h1>
+    <div class="text-body-secondary small"><i class="bi bi-lock me-1"></i>Kun du kan se din udstyrsliste</div>
+  </div>
+  <div class="d-flex gap-2">
+    <a href="{% url 'inventory:export' %}{% if querystring %}?{{ querystring }}{% endif %}" class="btn btn-outline-secondary">
+      <i class="bi bi-download me-1"></i>Eksportér CSV
+    </a>
+    <a href="{% url 'inventory:create' %}" class="btn btn-primary"><i class="bi bi-plus-lg me-1"></i>Tilføj udstyr</a>
+  </div>
+</div>
+
+<div class="row g-3 mb-4">
+  <div class="col-6 col-md-3">
+    <div class="card text-center h-100"><div class="card-body py-3">
+      <div class="fs-2 fw-semibold">{{ total_items }}</div><div class="small text-body-secondary">forskellige ting</div>
+    </div></div>
+  </div>
+  <div class="col-6 col-md-3">
+    <div class="card text-center h-100"><div class="card-body py-3">
+      <div class="fs-2 fw-semibold">{{ total_quantity }}</div><div class="small text-body-secondary">stk. i alt</div>
+    </div></div>
+  </div>
+  <div class="col-6 col-md-3">
+    <a href="?garanti=snart" class="text-decoration-none">
+      <div class="card text-center h-100 {% if soon_count %}border-warning{% endif %}"><div class="card-body py-3">
+        <div class="fs-2 fw-semibold {% if soon_count %}text-warning-emphasis{% endif %}">{{ soon_count }}</div>
+        <div class="small text-body-secondary">garanti udløber snart</div>
+      </div></div>
+    </a>
+  </div>
+  <div class="col-6 col-md-3">
+    <a href="?garanti=udloebet" class="text-decoration-none">
+      <div class="card text-center h-100 {% if expired_count %}border-danger{% endif %}"><div class="card-body py-3">
+        <div class="fs-2 fw-semibold {% if expired_count %}text-danger{% endif %}">{{ expired_count }}</div>
+        <div class="small text-body-secondary">garanti udløbet</div>
+      </div></div>
+    </a>
+  </div>
+</div>
+
+<form method="get" class="row g-2 mb-3 align-items-end">
+  <div class="col-12 col-lg-4">
+    <label for="q" class="form-label small mb-1">Søg</label>
+    <div class="input-group">
+      <span class="input-group-text"><i class="bi bi-search"></i></span>
+      <input type="search" id="q" name="q" value="{{ q }}" class="form-control" placeholder="Navn, placering, bemærkning…">
+    </div>
+  </div>
+  <div class="col-6 col-lg-2">
+    <label for="sted" class="form-label small mb-1">Placering</label>
+    <select id="sted" name="sted" class="form-select">
+      <option value="">Alle</option>
+      {% for place in locations %}<option value="{{ place }}"{% if place == sel_location %} selected{% endif %}>{{ place }}</option>{% endfor %}
+      <option value="__ingen__"{% if sel_location == "__ingen__" %} selected{% endif %}>(ingen placering)</option>
+    </select>
+  </div>
+  <div class="col-6 col-lg-2">
+    <label for="garanti" class="form-label small mb-1">Garanti</label>
+    <select id="garanti" name="garanti" class="form-select">
+      <option value="">Alle</option>
+      {% for key, label in warranty_filters.items %}<option value="{{ key }}"{% if key == sel_warranty %} selected{% endif %}>{{ label }}</option>{% endfor %}
+    </select>
+  </div>
+  <div class="col-8 col-lg-2">
+    <label for="sorter" class="form-label small mb-1">Sortér</label>
+    <select id="sorter" name="sorter" class="form-select">
+      {% for key, label in sorts.items %}<option value="{{ key }}"{% if key == sel_sort %} selected{% endif %}>{{ label }}</option>{% endfor %}
+    </select>
+  </div>
+  <div class="col-4 col-lg-2 d-flex gap-2">
+    <button class="btn btn-secondary flex-grow-1" type="submit">Filtrér</button>
+    {% if filtered %}<a href="{% url 'inventory:list' %}" class="btn btn-outline-secondary" title="Nulstil filtre" aria-label="Nulstil filtre"><i class="bi bi-x-lg"></i></a>{% endif %}
+  </div>
+</form>
+
+<div class="table-responsive">
+  <table class="table table-hover align-middle">
+    <thead>
+      <tr>
+        <th>Navn</th><th>Placering</th><th class="text-end">Antal</th><th>Købt</th><th>Garanti</th><th class="text-end">Handlinger</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for item in items %}
+        <tr>
+          <td>
+            <strong>{{ item.name }}</strong>
+            {% if item.notes %}<div class="small text-body-secondary">{{ item.notes|truncatechars:80 }}</div>{% endif %}
+          </td>
+          <td>{% if item.location %}<i class="bi bi-geo-alt me-1 text-body-secondary"></i>{{ item.location }}{% else %}<span class="text-body-secondary">–</span>{% endif %}</td>
+          <td class="text-end">{{ item.quantity }}</td>
+          <td>{{ item.purchased_on|date:"j. M Y"|default:"–" }}</td>
+          <td>{% include "inventory/_warranty_badge.html" %}</td>
+          <td class="text-end text-nowrap">
+            <a href="{% url 'inventory:update' item.pk %}" class="btn btn-sm btn-outline-secondary" aria-label="Rediger {{ item.name }}"><i class="bi bi-pencil"></i></a>
+            <a href="{% url 'inventory:delete' item.pk %}" class="btn btn-sm btn-outline-danger" aria-label="Slet {{ item.name }}"><i class="bi bi-trash"></i></a>
+          </td>
+        </tr>
+      {% empty %}
+        <tr><td colspan="6" class="text-center text-body-secondary py-4">
+          {% if filtered %}Intet udstyr matcher dine filtre.{% else %}Du har ikke tilføjet noget udstyr endnu.{% endif %}
+        </td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endblock %}

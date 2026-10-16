@@ -22,6 +22,7 @@ urlpatterns = [
     path("admin/", admin.site.urls),
     path("noter/", include("notes.urls")),
     path("guider/", include("guides.urls")),
+    path("udstyr/", include("inventory.urls")),
     path("", include("accounts.urls")),
     path("", include("pages.urls")),
 ]

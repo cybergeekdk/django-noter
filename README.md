@@ -55,6 +55,23 @@ Privatliv og sikkerhed:
 Husk at tage backup af `private_media/` sammen med databasen. I produktion skal
 `private_media/` ligge på vedvarende lager.
 
+## Udstyr (privat)
+
+Under **Udstyr** i menuen (kræver login) kan hver bruger føre en liste over det, man har:
+navn, placering (fri tekst med forslag fra tidligere placeringer), antal, købsdato,
+garantiens udløbsdato og bemærkninger (fx serienummer). Kun navn er påkrævet. Listen er
+**privat**: andre brugere, også super admins, får 404.
+
+- **Garantistatus** beregnes ud fra udløbsdatoen: *Udløbet*, *Udløber snart* (højst 60 dage
+  tilbage, justeres med `WARRANTY_SOON_DAYS` i `inventory/models.py`), *Garanti OK* eller
+  ingen garantidato. Overblikskortene øverst viser antal ting, stk. i alt og hvor mange
+  garantier der udløber snart eller er udløbet (klik for at filtrere).
+- **Søg, filtrér og sortér** på navn/placering/bemærkning, placering, garantistatus og
+  navn, placering, antal, købsdato eller garanti.
+- **Eksportér CSV** (`/udstyr/eksport/`) med de aktuelle filtre. Filen bruger semikolon og
+  UTF-8 med BOM, så dansk Excel åbner den korrekt, og celler der starter med `=`, `+`, `-`
+  eller `@` får et foranstillet `'` mod formelinjektion.
+
 ## Layout og menu
 
 Sitet bruger Bootstrap 5.3 og Bootstrap Icons, lagt lokalt i `static/vendor/`
