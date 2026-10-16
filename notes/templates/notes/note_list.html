@@ -1,0 +1,36 @@
+<!doctype html>
+<html lang="da">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Noter</title>
+  <style>
+    body { font-family: system-ui, sans-serif; max-width: 640px; margin: 2rem auto; padding: 0 1rem; }
+    form p { margin: .5rem 0; }
+    input, textarea { width: 100%; box-sizing: border-box; }
+    .note { border: 1px solid #ddd; border-radius: 6px; padding: .75rem; margin: .75rem 0; }
+    .note small { color: #666; }
+  </style>
+</head>
+<body>
+  <h1>Noter</h1>
+  <form method="post">
+    {% csrf_token %}
+    {{ form.as_p }}
+    <button type="submit">Gem note</button>
+  </form>
+
+  {% for note in notes %}
+    <div class="note">
+      <strong>{{ note.title }}</strong> <small>{{ note.created|date:"j. F Y H:i" }}</small>
+      <p>{{ note.body|linebreaksbr }}</p>
+      <form method="post" action="{% url 'notes:delete' note.pk %}">
+        {% csrf_token %}
+        <button type="submit">Slet</button>
+      </form>
+    </div>
+  {% empty %}
+    <p>Ingen noter endnu.</p>
+  {% endfor %}
+</body>
+</html>
