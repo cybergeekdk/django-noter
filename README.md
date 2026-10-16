@@ -19,6 +19,18 @@ python manage.py runserver
 
 Åbn http://127.0.0.1:8000/ — admin ligger på http://127.0.0.1:8000/admin/.
 
+## Admin
+
+Admin ligger på `/admin/` og kører på en egen `AdminSite` (`backoffice/sites.py`),
+der erstatter `django.contrib.admin` i `INSTALLED_APPS`. Derfor registrerer
+nye apps sig som normalt med `@admin.register(Model)`.
+
+Der bygges videre på den ved at:
+- tilføje nøgletal/widgets til dashboardet i `get_dashboard_context()` og vise dem
+  i `templates/backoffice/index.html`
+- ændre titler og branding på `BackofficeAdminSite`
+- oprette en `ModelAdmin` i hver apps `admin.py` (se `notes/admin.py`)
+
 ## Tests
 
 ```bash
