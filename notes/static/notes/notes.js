@@ -3,6 +3,7 @@
   const noteForm = document.getElementById("note-form");
   const searchForm = document.getElementById("search-form");
   const searchInput = searchForm.querySelector("input[name=q]");
+  const categorySelect = searchForm.querySelector("select[name=kategori]");
   const errorBox = document.getElementById("form-errors");
   const csrfToken = noteForm.querySelector("[name=csrfmiddlewaretoken]").value;
 
@@ -26,15 +27,20 @@
     errorBox.classList.toggle("d-none", !text);
   }
 
-  function currentQuery() {
-    return searchInput.value.trim();
+  // Aktuel søgning + kategorifilter som URL (bruges til både liste og oprettelse).
+  function currentUrl() {
+    const params = new URLSearchParams();
+    const q = searchInput.value.trim();
+    if (q) params.set("q", q);
+    if (categorySelect.value) params.set("kategori", categorySelect.value);
+    const qs = params.toString();
+    return qs ? `?${qs}` : location.pathname;
   }
 
   async function loadList() {
     if (searchController) searchController.abort();
     searchController = new AbortController();
-    const q = currentQuery();
-    const url = q ? `?q=${encodeURIComponent(q)}` : location.pathname;
+    const url = currentUrl();
     try {
       const response = await ajax(url, { signal: searchController.signal });
       list.innerHTML = await response.text();
@@ -50,6 +56,7 @@
     clearTimeout(timer);
     timer = setTimeout(loadList, 250);
   });
+  categorySelect.addEventListener("change", loadList);
   searchForm.addEventListener("submit", (event) => {
     event.preventDefault();
     clearTimeout(timer);
@@ -59,8 +66,7 @@
   noteForm.addEventListener("submit", async (event) => {
     event.preventDefault();
     showErrors("");
-    const q = currentQuery();
-    const response = await ajax(q ? `?q=${encodeURIComponent(q)}` : location.pathname, {
+    const response = await ajax(currentUrl(), {
       method: "POST",
       body: new FormData(noteForm),
     });
@@ -71,6 +77,14 @@
     } else {
       showErrors(Object.values(data.errors).flat().join(" "));
     }
+  });
+
+  // Klik på et kategorimærke filtrerer listen på den kategori.
+  list.addEventListener("click", (event) => {
+    const badge = event.target.closest(".category-badge");
+    if (!badge) return;
+    categorySelect.value = badge.dataset.category;
+    loadList();
   });
 
   // Event delegation, så slet-knapper i nyindlæste lister også virker.

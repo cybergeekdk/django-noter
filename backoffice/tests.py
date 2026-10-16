@@ -32,8 +32,8 @@ class BackofficeAdminTests(TestCase):
 
     def test_note_changelist_search(self):
         Note.objects.create(title="Indkøb", body="mælk")
-        Note.objects.create(title="Arbejde")
+        Note.objects.create(title="Regnskab")
         self.client.force_login(self.admin_user)
         response = self.client.get(reverse("admin:notes_note_changelist"), {"q": "mælk"})
         self.assertContains(response, "Indkøb")
-        self.assertNotContains(response, "Arbejde")
+        self.assertNotContains(response, "Regnskab")

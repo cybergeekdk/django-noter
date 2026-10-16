@@ -3,7 +3,13 @@
     <div class="card-body">
       <div class="d-flex justify-content-between align-items-start gap-3">
         <div>
-          <h5 class="card-title mb-1">{{ note.title }}</h5>
+          <h5 class="card-title mb-1">
+            {{ note.title }}
+            {% if note.category %}
+              <button type="button" class="badge border-0 text-bg-{{ note.category.color }} ms-1 category-badge"
+                      data-category="{{ note.category_id }}" title="Vis kun «{{ note.category.name }}»">{{ note.category.name }}</button>
+            {% endif %}
+          </h5>
           <h6 class="card-subtitle text-body-secondary small">{{ note.created|date:"j. F Y H:i" }}</h6>
         </div>
         <form method="post" action="{% url 'notes:delete' note.pk %}" class="delete-form">

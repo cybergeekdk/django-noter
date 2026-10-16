@@ -18,6 +18,10 @@
             {{ form.title }}
           </div>
           <div class="mb-3">
+            <label for="{{ form.category.id_for_label }}" class="form-label">{{ form.category.label }}</label>
+            {{ form.category }}
+          </div>
+          <div class="mb-3">
             <label for="{{ form.body.id_for_label }}" class="form-label">{{ form.body.label }}</label>
             {{ form.body }}
           </div>
@@ -36,6 +40,12 @@
         <span class="input-group-text"><i class="bi bi-search"></i></span>
         <input type="search" name="q" value="{{ query }}" class="form-control" placeholder="Søg i noter…"
                autocomplete="off" aria-label="Søg i noter">
+        <select name="kategori" class="form-select flex-grow-0 w-auto" aria-label="Filtrér efter kategori">
+          <option value="">Alle kategorier</option>
+          {% for category in categories %}
+            <option value="{{ category.pk }}"{% if category.pk == selected_category %} selected{% endif %}>{{ category.name }}</option>
+          {% endfor %}
+        </select>
         <span class="input-group-text">
           <span id="search-spinner" class="spinner-border spinner-border-sm" role="status" aria-label="Indlæser"></span>
           <i class="bi bi-check2 text-body-secondary" id="search-idle"></i>

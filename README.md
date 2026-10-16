@@ -19,6 +19,19 @@ python manage.py runserver
 
 Åbn http://127.0.0.1:8000/ — noter ligger på `/noter/` og admin på `/admin/`.
 
+## Kategorier
+
+Noter kan have en kategori (valgfri). En kategori har et navn og en farve (en af
+Bootstrap-farverne), og vises som et farvet mærke på noten.
+
+- På `/noter/` vælges kategori i formularen. Listen kan filtreres med dropdown'en eller
+  ved at klikke på et mærke, og filteret virker sammen med søgningen
+  (`/noter/?q=tekst&kategori=2`).
+- Kategorier oprettes, omdøbes og slettes i admin (`/admin/notes/category/`). Hvis en
+  kategori slettes, beholder noterne deres indhold og står blot uden kategori.
+- Migrationen opretter tre standardkategorier: Privat, Arbejde og Idéer.
+- Modellen er `notes.models.Category`; `Note.category` er en `ForeignKey` med `SET_NULL`.
+
 ## Layout og menu
 
 Sitet bruger Bootstrap 5.3 og Bootstrap Icons, lagt lokalt i `static/vendor/`
