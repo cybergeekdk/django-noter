@@ -1,0 +1,50 @@
+{% extends "base.html" %}
+
+{% block title %}{{ item.name }}{% endblock %}
+
+{% block content %}
+<nav aria-label="Sti">
+  <ol class="breadcrumb">
+    <li class="breadcrumb-item"><a href="{% url 'inventory:list' %}">Udstyr</a></li>
+    <li class="breadcrumb-item active" aria-current="page">{{ item.name }}</li>
+  </ol>
+</nav>
+
+<div class="d-flex flex-wrap justify-content-between align-items-start gap-2 mb-4">
+  <h1 class="mb-0">{{ item.name }}</h1>
+  <div class="d-flex gap-2">
+    <a href="{% url 'inventory:update' item.pk %}" class="btn btn-outline-secondary"><i class="bi bi-pencil me-1"></i>Rediger</a>
+    <a href="{% url 'inventory:delete' item.pk %}" class="btn btn-outline-danger"><i class="bi bi-trash me-1"></i>Slet</a>
+  </div>
+</div>
+
+<div class="row g-4">
+  <div class="col-md-6">
+    <div class="card"><div class="card-body">
+      <dl class="row mb-0">
+        <dt class="col-5">Placering</dt><dd class="col-7">{% if item.location %}{{ item.location.name }}{% else %}–{% endif %}</dd>
+        <dt class="col-5">Antal</dt><dd class="col-7">{{ item.quantity }}</dd>
+        <dt class="col-5">Købt</dt><dd class="col-7">{{ item.purchased_on|date:"j. F Y"|default:"–" }}</dd>
+        <dt class="col-5">Garanti</dt><dd class="col-7">{% include "inventory/_warranty_badge.html" %}</dd>
+        {% if item.notes %}<dt class="col-5">Bemærkninger</dt><dd class="col-7 mb-0" style="white-space: pre-line">{{ item.notes }}</dd>{% endif %}
+      </dl>
+    </div></div>
+  </div>
+  <div class="col-md-6">
+    <div class="card"><div class="card-header"><i class="bi bi-paperclip me-1"></i>Bilag</div>
+      <ul class="list-group list-group-flush">
+        {% for att in item.attachments.all %}
+          <li class="list-group-item d-flex align-items-center gap-3">
+            {% if att.is_pdf %}<i class="bi bi-file-earmark-pdf fs-3 text-danger"></i>
+            {% else %}<a href="{% url 'inventory:attachment' att.pk %}" target="_blank" rel="noopener"><img src="{% url 'inventory:attachment' att.pk %}" alt="{{ att.label }}" class="rounded att-thumb"></a>{% endif %}
+            <span class="flex-grow-1">{{ att.label|default:"Bilag" }}</span>
+            <a href="{% url 'inventory:attachment' att.pk %}" class="btn btn-sm btn-outline-secondary" {% if not att.is_pdf %}target="_blank" rel="noopener"{% endif %}>{% if att.is_pdf %}Hent PDF{% else %}Åbn{% endif %}</a>
+          </li>
+        {% empty %}
+          <li class="list-group-item text-body-secondary">Ingen bilag. <a href="{% url 'inventory:update' item.pk %}">Tilføj en kvittering</a>.</li>
+        {% endfor %}
+      </ul>
+    </div>
+  </div>
+</div>
+{% endblock %}

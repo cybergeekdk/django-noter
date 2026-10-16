@@ -1,0 +1,43 @@
+{% extends "base.html" %}
+
+{% block title %}Placeringer{% endblock %}
+
+{% block content %}
+<nav aria-label="Sti">
+  <ol class="breadcrumb">
+    <li class="breadcrumb-item"><a href="{% url 'inventory:list' %}">Udstyr</a></li>
+    <li class="breadcrumb-item active" aria-current="page">Placeringer</li>
+  </ol>
+</nav>
+<div class="d-flex flex-wrap justify-content-between align-items-center gap-2 mb-4">
+  <h1 class="mb-0">Placeringer</h1>
+  <a href="{% url 'inventory:location_create' %}" class="btn btn-primary"><i class="bi bi-plus-lg me-1"></i>Ny placering</a>
+</div>
+<p class="text-body-secondary">Omdøber du en placering, følger alle tingene på den automatisk med.</p>
+
+<div class="table-responsive">
+  <table class="table table-hover align-middle">
+    <thead><tr><th>Placering</th><th class="text-end">Ting</th><th class="text-end">Handlinger</th></tr></thead>
+    <tbody>
+      {% for location in locations %}
+        <tr>
+          <td><i class="bi bi-geo-alt me-1 text-body-secondary"></i><a href="{% url 'inventory:list' %}?sted={{ location.pk }}" class="text-decoration-none">{{ location.name }}</a></td>
+          <td class="text-end">{{ location.item_count }}</td>
+          <td class="text-end text-nowrap">
+            <a href="{% url 'inventory:location_update' location.pk %}" class="btn btn-sm btn-outline-secondary" aria-label="Omdøb {{ location.name }}"><i class="bi bi-pencil"></i></a>
+            <a href="{% url 'inventory:location_delete' location.pk %}" class="btn btn-sm btn-outline-danger" aria-label="Slet {{ location.name }}"><i class="bi bi-trash"></i></a>
+          </td>
+        </tr>
+      {% empty %}
+        <tr><td colspan="3" class="text-center text-body-secondary py-4">Ingen placeringer endnu.</td></tr>
+      {% endfor %}
+      {% if unplaced_count %}
+        <tr class="table-light">
+          <td class="text-body-secondary"><a href="{% url 'inventory:list' %}?sted=__ingen__" class="text-decoration-none text-body-secondary">(ingen placering)</a></td>
+          <td class="text-end text-body-secondary">{{ unplaced_count }}</td><td></td>
+        </tr>
+      {% endif %}
+    </tbody>
+  </table>
+</div>
+{% endblock %}

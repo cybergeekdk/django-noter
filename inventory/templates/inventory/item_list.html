@@ -8,7 +8,9 @@
     <h1 class="mb-0">Udstyr</h1>
     <div class="text-body-secondary small"><i class="bi bi-lock me-1"></i>Kun du kan se din udstyrsliste</div>
   </div>
-  <div class="d-flex gap-2">
+  <div class="d-flex flex-wrap gap-2">
+    <a href="{% url 'inventory:locations' %}" class="btn btn-outline-secondary"><i class="bi bi-geo-alt me-1"></i>Placeringer</a>
+    <a href="{% url 'inventory:reminders' %}" class="btn btn-outline-secondary"><i class="bi bi-bell me-1"></i>Påmindelser</a>
     <a href="{% url 'inventory:export' %}{% if querystring %}?{{ querystring }}{% endif %}" class="btn btn-outline-secondary">
       <i class="bi bi-download me-1"></i>Eksportér CSV
     </a>
@@ -57,7 +59,7 @@
     <label for="sted" class="form-label small mb-1">Placering</label>
     <select id="sted" name="sted" class="form-select">
       <option value="">Alle</option>
-      {% for place in locations %}<option value="{{ place }}"{% if place == sel_location %} selected{% endif %}>{{ place }}</option>{% endfor %}
+      {% for place in locations %}<option value="{{ place.pk }}"{% if place.pk|stringformat:"s" == sel_location %} selected{% endif %}>{{ place.name }}</option>{% endfor %}
       <option value="__ingen__"{% if sel_location == "__ingen__" %} selected{% endif %}>(ingen placering)</option>
     </select>
   </div>
@@ -91,10 +93,11 @@
       {% for item in items %}
         <tr>
           <td>
-            <strong>{{ item.name }}</strong>
+            <a href="{% url 'inventory:detail' item.pk %}" class="fw-bold text-decoration-none">{{ item.name }}</a>
+            {% if item.attachment_count %}<span class="text-body-secondary small ms-1" title="{{ item.attachment_count }} bilag"><i class="bi bi-paperclip"></i>{{ item.attachment_count }}</span>{% endif %}
             {% if item.notes %}<div class="small text-body-secondary">{{ item.notes|truncatechars:80 }}</div>{% endif %}
           </td>
-          <td>{% if item.location %}<i class="bi bi-geo-alt me-1 text-body-secondary"></i>{{ item.location }}{% else %}<span class="text-body-secondary">–</span>{% endif %}</td>
+          <td>{% if item.location %}<i class="bi bi-geo-alt me-1 text-body-secondary"></i>{{ item.location.name }}{% else %}<span class="text-body-secondary">–</span>{% endif %}</td>
           <td class="text-end">{{ item.quantity }}</td>
           <td>{{ item.purchased_on|date:"j. M Y"|default:"–" }}</td>
           <td>{% include "inventory/_warranty_badge.html" %}</td>

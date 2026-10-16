@@ -1,0 +1,48 @@
+{% extends "base.html" %}
+
+{% block title %}Garantipåmindelser{% endblock %}
+
+{% block content %}
+<nav aria-label="Sti">
+  <ol class="breadcrumb">
+    <li class="breadcrumb-item"><a href="{% url 'inventory:list' %}">Udstyr</a></li>
+    <li class="breadcrumb-item active" aria-current="page">Påmindelser</li>
+  </ol>
+</nav>
+<div class="row justify-content-center">
+  <div class="col-lg-6">
+    <h1 class="mb-3"><i class="bi bi-bell me-2"></i>Garantipåmindelser</h1>
+    <p class="text-body-secondary">Få en e-mail, når garantien på noget af dit udstyr er ved at udløbe. Du får kun én mail pr. garanti.</p>
+    <form method="post" novalidate>
+      {% csrf_token %}
+      {% if form.non_field_errors %}<div class="alert alert-danger">{{ form.non_field_errors|join:" " }}</div>{% endif %}
+      <div class="form-check form-switch mb-3">
+        {{ form.enabled }}
+        <label class="form-check-label" for="{{ form.enabled.id_for_label }}">{{ form.enabled.label }}</label>
+      </div>
+      <div class="mb-3">
+        <label for="{{ form.email.id_for_label }}" class="form-label">{{ form.email.label }}</label>
+        {{ form.email }}
+        {% for error in form.email.errors %}<div class="text-danger small mt-1">{{ error }}</div>{% endfor %}
+        <div class="form-text">{{ form.email.help_text }}</div>
+      </div>
+      <div class="mb-4">
+        <label for="{{ form.days_before.id_for_label }}" class="form-label">Hvornår vil du have besked?</label>
+        {{ form.days_before }}
+      </div>
+      <div class="d-flex gap-2">
+        <button type="submit" class="btn btn-primary">Gem</button>
+        <a href="{% url 'inventory:list' %}" class="btn btn-outline-secondary">Tilbage</a>
+      </div>
+    </form>
+    {% if user.email %}
+      <hr class="my-4">
+      <form method="post" action="{% url 'inventory:reminder_test' %}" class="d-flex align-items-center gap-3">
+        {% csrf_token %}
+        <button type="submit" class="btn btn-outline-secondary btn-sm"><i class="bi bi-send me-1"></i>Send testmail</button>
+        <span class="small text-body-secondary">til {{ user.email }}</span>
+      </form>
+    {% endif %}
+  </div>
+</div>
+{% endblock %}

@@ -10,6 +10,7 @@ For the full list of settings and their values, see
 https://docs.djangoproject.com/en/6.1/ref/settings/
 """
 
+import os
 from pathlib import Path
 
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
@@ -128,9 +129,25 @@ STATICFILES_DIRS = [BASE_DIR / "static"]
 
 MAILERS = {
     "default": {
+        # Udvikling: mails skrives i terminalen. Sæt EMAIL_HOST for at sende rigtigt via SMTP.
         "BACKEND": "django.core.mail.backends.console.EmailBackend",
     },
 }
+if os.environ.get("EMAIL_HOST"):
+    MAILERS["default"] = {
+        "BACKEND": "django.core.mail.backends.smtp.EmailBackend",
+        "OPTIONS": {
+            "host": os.environ["EMAIL_HOST"],
+            "port": int(os.environ.get("EMAIL_PORT", "587")),
+            "username": os.environ.get("EMAIL_HOST_USER", ""),
+            "password": os.environ.get("EMAIL_HOST_PASSWORD", ""),
+            "use_tls": os.environ.get("EMAIL_USE_TLS", "1") == "1",
+        },
+    }
+
+DEFAULT_FROM_EMAIL = os.environ.get("DEFAULT_FROM_EMAIL", "noter@localhost")
+# Bruges til links i e-mails (fx garantipåmindelser).
+SITE_URL = os.environ.get("SITE_URL", "http://127.0.0.1:8000")
 
 # Django-beskedniveauer -> Bootstrap alert-klasser
 from django.contrib.messages import constants as message_constants  # noqa: E402

@@ -4,9 +4,9 @@
 
 {% block content %}
 <div class="row justify-content-center">
-  <div class="col-lg-7">
+  <div class="col-lg-8">
     <h1 class="mb-4">{% if object %}Rediger udstyr{% else %}Tilføj udstyr{% endif %}</h1>
-    <form method="post" novalidate>
+    <form method="post" enctype="multipart/form-data" novalidate>
       {% csrf_token %}
       {% if form.non_field_errors %}<div class="alert alert-danger">{{ form.non_field_errors|join:" " }}</div>{% endif %}
 
@@ -17,14 +17,18 @@
       </div>
 
       <div class="row g-3 mb-3">
-        <div class="col-sm-8">
+        <div class="col-sm-4">
           <label for="{{ form.location.id_for_label }}" class="form-label">{{ form.location.label }}</label>
           {{ form.location }}
-          <datalist id="locations">{% for place in locations %}<option value="{{ place }}">{% endfor %}</datalist>
           {% for error in form.location.errors %}<div class="text-danger small mt-1">{{ error }}</div>{% endfor %}
-          <div class="form-text">{{ form.location.help_text }}</div>
         </div>
-        <div class="col-sm-4">
+        <div class="col-sm-5">
+          <label for="{{ form.new_location.id_for_label }}" class="form-label">{{ form.new_location.label }}</label>
+          {{ form.new_location }}
+          {% for error in form.new_location.errors %}<div class="text-danger small mt-1">{{ error }}</div>{% endfor %}
+          <div class="form-text"><a href="{% url 'inventory:locations' %}">Administrér placeringer</a></div>
+        </div>
+        <div class="col-sm-3">
           <label for="{{ form.quantity.id_for_label }}" class="form-label">{{ form.quantity.label }}</label>
           {{ form.quantity }}
           {% for error in form.quantity.errors %}<div class="text-danger small mt-1">{{ error }}</div>{% endfor %}
@@ -48,7 +52,37 @@
         <label for="{{ form.notes.id_for_label }}" class="form-label">{{ form.notes.label }}</label>
         {{ form.notes }}
         {% for error in form.notes.errors %}<div class="text-danger small mt-1">{{ error }}</div>{% endfor %}
-        <div class="form-text">Fx serienummer, model eller hvor kvitteringen ligger.</div>
+        <div class="form-text">Fx serienummer eller model.</div>
+      </div>
+
+      <h2 class="h5">Bilag</h2>
+      {% if formset %}
+        {{ formset.management_form }}
+        {% if formset.non_form_errors %}<div class="alert alert-danger">{{ formset.non_form_errors|join:" " }}</div>{% endif %}
+        {% if formset.forms %}
+          <ul class="list-group mb-3">
+            {% for att_form in formset %}
+              <li class="list-group-item d-flex flex-wrap align-items-center gap-2">
+                {{ att_form.id }}
+                {% if att_form.instance.is_pdf %}<i class="bi bi-file-earmark-pdf fs-4 text-danger"></i>
+                {% else %}<img src="{% url 'inventory:attachment' att_form.instance.pk %}" alt="" class="rounded att-thumb">{% endif %}
+                <div class="flex-grow-1">{{ att_form.label }}
+                  {% for error in att_form.label.errors %}<div class="text-danger small">{{ error }}</div>{% endfor %}</div>
+                <a href="{% url 'inventory:attachment' att_form.instance.pk %}" class="btn btn-sm btn-outline-secondary">{% if att_form.instance.is_pdf %}Hent{% else %}Vis{% endif %}</a>
+                <div class="form-check mb-0">
+                  {{ att_form.DELETE }}
+                  <label class="form-check-label small text-danger" for="{{ att_form.DELETE.id_for_label }}">Slet</label>
+                </div>
+              </li>
+            {% endfor %}
+          </ul>
+        {% endif %}
+      {% endif %}
+      <div class="mb-4">
+        <label for="{{ form.new_files.id_for_label }}" class="form-label">{{ form.new_files.label }}</label>
+        {{ form.new_files }}
+        {% for error in form.new_files.errors %}<div class="text-danger small mt-1">{{ error }}</div>{% endfor %}
+        <div class="form-text">{{ form.new_files.help_text }}</div>
       </div>
 
       <div class="d-flex gap-2">

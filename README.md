@@ -58,9 +58,9 @@ Husk at tage backup af `private_media/` sammen med databasen. I produktion skal
 ## Udstyr (privat)
 
 Under **Udstyr** i menuen (kræver login) kan hver bruger føre en liste over det, man har:
-navn, placering (fri tekst med forslag fra tidligere placeringer), antal, købsdato,
-garantiens udløbsdato og bemærkninger (fx serienummer). Kun navn er påkrævet. Listen er
-**privat**: andre brugere, også super admins, får 404.
+navn, placering, antal, købsdato, garantiens udløbsdato, bemærkninger (fx serienummer) og
+bilag (kvitteringer, manualer, fotos). Kun navn er påkrævet. Listen er **privat**: andre
+brugere, også super admins, får 404.
 
 - **Garantistatus** beregnes ud fra udløbsdatoen: *Udløbet*, *Udløber snart* (højst 60 dage
   tilbage, justeres med `WARRANTY_SOON_DAYS` i `inventory/models.py`), *Garanti OK* eller
@@ -71,6 +71,53 @@ garantiens udløbsdato og bemærkninger (fx serienummer). Kun navn er påkrævet
 - **Eksportér CSV** (`/udstyr/eksport/`) med de aktuelle filtre. Filen bruger semikolon og
   UTF-8 med BOM, så dansk Excel åbner den korrekt, og celler der starter med `=`, `+`, `-`
   eller `@` får et foranstillet `'` mod formelinjektion.
+
+### Placeringer
+
+Placeringer er faste (`/udstyr/placeringer/`): oprettes, omdøbes og slettes ét sted, og
+tingene følger med. I tingens formular vælger man en eksisterende placering eller skriver
+et nyt navn (så oprettes den, og samme navn med andre store/små bogstaver genbruges).
+Sletter man en placering, beholdes tingene og står bagefter uden placering. Migrationerne
+har flyttet tidligere tekstplaceringer over til faste placeringer.
+
+### Bilag (kvitteringer)
+
+Hver ting kan have op til 10 bilag: JPEG, PNG, GIF, WEBP eller PDF, op til 8 MB pr. fil.
+Bilag gemmes privat i `private_media/` på samme måde som guide-billeder (tilfældige
+filnavne, ingen offentlig URL, ejerskab tjekkes ved hver visning, indholdet valideres,
+SVG afvises, filer slettes sammen med tingen). Billeder vises direkte; PDF'er hentes som
+fil. Husk backup af `private_media/`.
+
+### E-mailpåmindelser
+
+Under **Påmindelser** (`/udstyr/paamindelser/`) slår man garantipåmindelser til, angiver sin
+e-mailadresse og hvor mange dage før udløb man vil have besked (1 uge til 3 måneder), og kan
+sende sig selv en testmail. Hver garanti giver **kun én mail**; ændrer man garantidatoen,
+nulstilles påmindelsen. Mails sendes af en kommando, der skal køres dagligt:
+
+```bash
+python manage.py send_warranty_reminders            # send
+python manage.py send_warranty_reminders --dry-run  # vis kun, hvor mange der ville blive sendt
+```
+
+Planlæg den fx med cron (hver dag kl. 08:00):
+
+```cron
+0 8 * * * cd /sti/til/django_projekt && .venv/bin/python manage.py send_warranty_reminders
+```
+
+Som standard skrives mails bare i terminalen (udvikling). Til rigtige mails sættes
+miljøvariabler, som `mysite/settings.py` læser til Djangos `MAILERS`:
+
+| Variabel | Betydning |
+|---|---|
+| `EMAIL_HOST` | SMTP-server (sættes denne, bruges SMTP) |
+| `EMAIL_PORT`, `EMAIL_USE_TLS` | Standard `587` og `1` |
+| `EMAIL_HOST_USER`, `EMAIL_HOST_PASSWORD` | Login til SMTP |
+| `DEFAULT_FROM_EMAIL` | Afsenderadresse |
+| `SITE_URL` | Sitets adresse, bruges til links i mails (fx `https://noter.example.dk`) |
+
+Sker en afsendelse ikke, prøves den igen ved næste kørsel.
 
 ## Layout og menu
 
