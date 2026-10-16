@@ -1,0 +1,51 @@
+{% extends "base.html" %}
+
+{% block title %}Mine guider{% endblock %}
+
+{% block content %}
+<div class="d-flex flex-wrap justify-content-between align-items-center gap-2 mb-4">
+  <div>
+    <h1 class="mb-0">Mine guider</h1>
+    <div class="text-body-secondary small"><i class="bi bi-lock me-1"></i>Kun du kan se dine guider</div>
+  </div>
+  <a href="{% url 'guides:create' %}" class="btn btn-primary"><i class="bi bi-plus-lg me-1"></i>Ny guide</a>
+</div>
+
+<form method="get" class="mb-4">
+  <div class="input-group">
+    <span class="input-group-text"><i class="bi bi-search"></i></span>
+    <input type="search" name="q" value="{{ query }}" class="form-control" placeholder="Søg i guider…" aria-label="Søg i guider">
+    <button class="btn btn-outline-secondary" type="submit">Søg</button>
+  </div>
+</form>
+
+<div class="row g-4">
+  {% for guide in guides %}
+    <div class="col-md-6 col-lg-4">
+      <div class="card h-100 shadow-sm">
+        {% if guide.cover %}
+          <img src="{% url 'guides:cover' guide.pk %}" class="card-img-top guide-cover" alt="" loading="lazy">
+        {% else %}
+          <div class="guide-cover guide-cover-empty d-flex align-items-center justify-content-center text-body-secondary">
+            <i class="bi bi-journal-richtext display-4"></i>
+          </div>
+        {% endif %}
+        <div class="card-body">
+          <h5 class="card-title"><a href="{{ guide.get_absolute_url }}" class="stretched-link text-decoration-none">{{ guide.title }}</a></h5>
+          {% if guide.summary %}<p class="card-text text-body-secondary">{{ guide.summary|truncatechars:140 }}</p>{% endif %}
+        </div>
+        <div class="card-footer text-body-secondary small d-flex justify-content-between">
+          <span><i class="bi bi-list-ol me-1"></i>{{ guide.section_count }} afsnit</span>
+          <span>Opdateret {{ guide.updated|date:"j. M Y" }}</span>
+        </div>
+      </div>
+    </div>
+  {% empty %}
+    <div class="col-12">
+      <div class="alert alert-secondary">
+        {% if query %}Ingen guider matcher «{{ query }}».{% else %}Du har ingen guider endnu. Opret din første!{% endif %}
+      </div>
+    </div>
+  {% endfor %}
+</div>
+{% endblock %}

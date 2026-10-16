@@ -40,6 +40,7 @@ INSTALLED_APPS = [
     "accounts",
     "pages",
     "notes",
+    "guides",
 ]
 
 MIDDLEWARE = [
@@ -139,3 +140,7 @@ MESSAGE_TAGS = {message_constants.ERROR: "danger"}
 LOGIN_URL = "accounts:login"
 LOGIN_REDIRECT_URL = "pages:home"
 LOGOUT_REDIRECT_URL = "pages:home"
+
+# Private uploads (guide-billeder). Ligger uden for static/media og har ingen offentlig URL;
+# de leveres kun gennem en visning, der tjekker ejerskab.
+PRIVATE_MEDIA_ROOT = BASE_DIR / "private_media"

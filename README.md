@@ -32,6 +32,29 @@ Bootstrap-farverne), og vises som et farvet mærke på noten.
 - Migrationen opretter tre standardkategorier: Privat, Arbejde og Idéer.
 - Modellen er `notes.models.Category`; `Note.category` er en `ForeignKey` med `SET_NULL`.
 
+## Guider (private)
+
+Under **Guider** i menuen (kræver login) kan hver bruger lave større guider, som **kun
+ejeren kan se**. En guide har titel, beskrivelse, et valgfrit forsidebillede og et antal
+afsnit. Hvert afsnit har en titel, tekst i Markdown og et vilkårligt antal billeder med
+billedtekst. Afsnit kan flyttes op og ned, og detaljesiden har en indholdsfortegnelse og
+forstørrelse af billeder. Søgningen på `/guider/` kigger også i afsnittenes tekst.
+
+Privatliv og sikkerhed:
+
+- Alle visninger filtrerer på ejer. Andres guider og billeder giver **404**, også for
+  super admins. Guider er bevidst ikke registreret i Djangos admin.
+- Billeder gemmes i `private_media/` (git-ignoreret) med tilfældige filnavne og har
+  ingen offentlig URL. De leveres kun af `guides.views.serve_image`/`serve_cover`, som
+  tjekker ejerskab, med `nosniff` og en stram `Content-Security-Policy`.
+- Uploads valideres på størrelse (maks. 8 MB), filendelse og **faktisk** billedformat
+  (JPEG, PNG, GIF, WEBP). SVG afvises. Maks. 20 billeder pr. afsnit.
+- Markdown renses med `nh3`: ingen scripts, iframes, billeder eller `javascript:`-links.
+- Billedfiler slettes fra disken, når billedet, afsnittet eller guiden slettes.
+
+Husk at tage backup af `private_media/` sammen med databasen. I produktion skal
+`private_media/` ligge på vedvarende lager.
+
 ## Layout og menu
 
 Sitet bruger Bootstrap 5.3 og Bootstrap Icons, lagt lokalt i `static/vendor/`

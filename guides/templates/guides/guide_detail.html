@@ -1,0 +1,106 @@
+{% extends "base.html" %}
+{% load guides_extras %}
+
+{% block title %}{{ guide.title }}{% endblock %}
+
+{% block content %}
+<div class="d-flex flex-wrap justify-content-between align-items-start gap-2 mb-3">
+  <nav aria-label="Sti">
+    <ol class="breadcrumb mb-0">
+      <li class="breadcrumb-item"><a href="{% url 'guides:list' %}">Mine guider</a></li>
+      <li class="breadcrumb-item active" aria-current="page">{{ guide.title }}</li>
+    </ol>
+  </nav>
+  <div class="d-flex gap-2">
+    <a href="{% url 'guides:section_create' guide.pk %}" class="btn btn-sm btn-primary"><i class="bi bi-plus-lg me-1"></i>Nyt afsnit</a>
+    <a href="{% url 'guides:update' guide.pk %}" class="btn btn-sm btn-outline-secondary"><i class="bi bi-pencil me-1"></i>Rediger guide</a>
+    <a href="{% url 'guides:delete' guide.pk %}" class="btn btn-sm btn-outline-danger"><i class="bi bi-trash me-1"></i>Slet</a>
+  </div>
+</div>
+
+{% if guide.cover %}
+  <img src="{% url 'guides:cover' guide.pk %}" alt="" class="img-fluid rounded mb-4 guide-hero">
+{% endif %}
+<h1>{{ guide.title }}</h1>
+{% if guide.summary %}<p class="lead text-body-secondary">{{ guide.summary }}</p>{% endif %}
+<hr>
+
+<div class="row g-4">
+  <aside class="col-lg-3 order-lg-2">
+    <div class="guide-toc sticky-lg-top">
+      <h2 class="h6 text-uppercase text-body-secondary">Indhold</h2>
+      {% if guide.sections.all %}
+        <ol class="list-group list-group-numbered list-group-flush">
+          {% for section in guide.sections.all %}
+            <li class="list-group-item px-0"><a href="#afsnit-{{ section.pk }}" class="text-decoration-none">{{ section.title }}</a></li>
+          {% endfor %}
+        </ol>
+      {% else %}
+        <p class="text-body-secondary small">Ingen afsnit endnu.</p>
+      {% endif %}
+    </div>
+  </aside>
+
+  <div class="col-lg-9 order-lg-1">
+    {% for section in guide.sections.all %}
+      <section id="afsnit-{{ section.pk }}" class="guide-section mb-5">
+        <div class="d-flex justify-content-between align-items-start gap-2">
+          <h2 class="h3">{{ forloop.counter }}. {{ section.title }}</h2>
+          <div class="btn-group btn-group-sm flex-shrink-0">
+            <form method="post" action="{% url 'guides:section_move' section.pk %}">
+              {% csrf_token %}<input type="hidden" name="direction" value="up">
+              <button class="btn btn-outline-secondary rounded-end-0" {% if forloop.first %}disabled{% endif %} aria-label="Flyt op"><i class="bi bi-arrow-up"></i></button>
+            </form>
+            <form method="post" action="{% url 'guides:section_move' section.pk %}">
+              {% csrf_token %}<input type="hidden" name="direction" value="down">
+              <button class="btn btn-outline-secondary rounded-0" {% if forloop.last %}disabled{% endif %} aria-label="Flyt ned"><i class="bi bi-arrow-down"></i></button>
+            </form>
+            <a href="{% url 'guides:section_update' section.pk %}" class="btn btn-outline-secondary rounded-0" aria-label="Rediger afsnit"><i class="bi bi-pencil"></i></a>
+            <a href="{% url 'guides:section_delete' section.pk %}" class="btn btn-outline-danger rounded-start-0" aria-label="Slet afsnit"><i class="bi bi-trash"></i></a>
+          </div>
+        </div>
+        <div class="guide-body">{{ section.body|markdown_safe }}</div>
+        {% if section.images.all %}
+          <div class="row g-3 mt-1">
+            {% for image in section.images.all %}
+              <figure class="col-sm-6 {% if section.images.all|length == 1 %}col-lg-12{% endif %} mb-0">
+                <a href="#" data-bs-toggle="modal" data-bs-target="#imageModal"
+                   data-image="{% url 'guides:image' image.pk %}" data-caption="{{ image.caption }}">
+                  <img src="{% url 'guides:image' image.pk %}" alt="{{ image.caption|default:section.title }}" class="img-fluid rounded border guide-image" loading="lazy">
+                </a>
+                {% if image.caption %}<figcaption class="small text-body-secondary mt-1">{{ image.caption }}</figcaption>{% endif %}
+              </figure>
+            {% endfor %}
+          </div>
+        {% endif %}
+      </section>
+    {% empty %}
+      <div class="alert alert-secondary">
+        Guiden har ingen afsnit endnu. <a href="{% url 'guides:section_create' guide.pk %}">Tilføj det første afsnit</a>.
+      </div>
+    {% endfor %}
+  </div>
+</div>
+
+<div class="modal fade" id="imageModal" tabindex="-1" aria-label="Billede" aria-hidden="true">
+  <div class="modal-dialog modal-xl modal-dialog-centered">
+    <div class="modal-content">
+      <div class="modal-header border-0 pb-0">
+        <span class="modal-title small text-body-secondary" id="imageModalCaption"></span>
+        <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Luk"></button>
+      </div>
+      <div class="modal-body text-center"><img src="" alt="" class="img-fluid" id="imageModalImg"></div>
+    </div>
+  </div>
+</div>
+{% endblock %}
+
+{% block extra_js %}
+<script>
+  document.getElementById("imageModal").addEventListener("show.bs.modal", (event) => {
+    const link = event.relatedTarget;
+    document.getElementById("imageModalImg").src = link.dataset.image;
+    document.getElementById("imageModalCaption").textContent = link.dataset.caption;
+  });
+</script>
+{% endblock %}
