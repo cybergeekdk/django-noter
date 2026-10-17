@@ -9,6 +9,7 @@
 {% url 'accounts:user_list' as users_url %}
 {% url 'guides:list' as guides_url %}
 {% url 'inventory:list' as inventory_url %}
+{% url 'elpriser:index' as elpriser_url %}
 <nav class="navbar navbar-expand-lg bg-body-tertiary border-bottom sticky-top">
   <div class="container">
     <a class="navbar-brand fw-semibold" href="{{ home_url }}"><i class="bi bi-journal-text me-1"></i>Django noter</a>
@@ -26,6 +27,9 @@
         </li>
         <li class="nav-item">
           <a class="nav-link{% if request.path == about_url %} active{% endif %}" href="{{ about_url }}"><i class="bi bi-info-circle me-1"></i>Om</a>
+        </li>
+        <li class="nav-item">
+          <a class="nav-link{% if request.path|slice:':10' == elpriser_url %} active{% endif %}" href="{{ elpriser_url }}"><i class="bi bi-lightning-charge me-1"></i>Elpriser</a>
         </li>
         {% if user.is_authenticated %}
           <li class="nav-item">

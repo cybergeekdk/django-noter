@@ -119,6 +119,54 @@ miljøvariabler, som `mysite/settings.py` læser til Djangos `MAILERS`:
 
 Sker en afsendelse ikke, prøves den igen ved næste kørsel.
 
+## Elpriser
+
+Siden **Elpriser** (`/elpriser/`, åben for alle, da det er offentlige data) viser danske
+day-ahead-spotpriser fra Energinets åbne data ([Energi Data Service](https://www.energidataservice.dk/)):
+
+- **Dagsgraf** for en valgt dag med farver for billigste/dyreste tredjedel og markering af
+  «nu», samt nøgletal: pris lige nu, billigst, dyrest, gennemsnit og de **billigste 3 timer i træk**.
+  Man kan skifte mellem DK1 (Vestdanmark) og DK2 (Østdanmark), bladre mellem dage (også i morgen,
+  når priserne er offentliggjort, normalt omkring kl. 13), vælge timegennemsnit eller den
+  opløsning, Energinet leverer, og slå moms til. Grafen kan også ses som tabel.
+- **Udvikling**: gennemsnitspris pr. dag og **typisk døgnprofil** (hvilke timer er normalt billigst)
+  over 7, 30 eller 90 dage.
+- Priserne er rene **spotpriser uden** nettarif, elafgift, abonnement og leverandørtillæg; «inkl. moms»
+  lægger kun 25 % oven på spotprisen. Enhed er øre/kWh (1 DKK/MWh = 0,1 øre/kWh).
+- Alle datoer og dage er danske kalenderdage (korrekt også ved sommer-/vintertid, hvor en dag er
+  23 eller 25 timer). Tidsopløsningen aflæses af data, så koden virker både med timer og kvarterer.
+
+### Hentning af priser
+
+Priserne hentes af en kommando, som kan køres så ofte, man vil (gemte priser opdateres blot):
+
+```bash
+python manage.py fetch_elpriser                  # i går, i dag og i morgen, begge områder
+python manage.py fetch_elpriser --days-back 90   # hent historik (hentes i bidder á 30 dage)
+python manage.py fetch_elpriser --area DK1       # kun ét område
+python manage.py fetch_elpriser --check-api      # kontrollér forbindelse og datasættets opbygning
+```
+
+Planlæg den med cron, fx hver time (og ekstra tæt omkring offentliggørelsen af næste døgns priser):
+
+```cron
+7 * * * *       cd /sti/til/django_projekt && .venv/bin/python manage.py fetch_elpriser
+*/10 13-14 * * * cd /sti/til/django_projekt && .venv/bin/python manage.py fetch_elpriser
+```
+
+Kommandoen afslutter med en fejlkode, hvis hentningen fejler (så cron/overvågning opdager det), og
+hvert forsøg logges (`FetchRun`, ses i admin). Siden viser «opdateret for … siden» og en advarsel,
+hvis seneste vellykkede hentning er mere end 26 timer gammel. Super admins har en knap **Opdatér nu**.
+Mislykkede kald prøves op til 3 gange. Indstillinger (miljøvariabler): `ENERGINET_API_URL`
+(standard `https://api.energidataservice.dk`), `ENERGINET_DATASET` (standard `DayAheadPrices`),
+`ENERGINET_TIMEOUT` (sekunder, standard 30).
+
+> **Kør `python manage.py fetch_elpriser --check-api` første gang.** Koden blev skrevet i et miljø
+> uden adgang til Energinets API og dokumentation, så datasættets navn og kolonner (`DayAheadPrices`
+> med `TimeUTC`, `PriceArea`, `DayAheadPriceDKK`) er bygget efter, hvad der var kendt, og testene
+> bruger en erstattet netværksforbindelse. Kommandoen kalder det rigtige API, viser kolonner og
+> tidsopløsning og fejler tydeligt, hvis noget afviger. Priserne bruges kun, hvis de kan tolkes.
+
 ## Layout og menu
 
 Sitet bruger Bootstrap 5.3 og Bootstrap Icons, lagt lokalt i `static/vendor/`
