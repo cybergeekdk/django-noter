@@ -8,7 +8,8 @@
      data-url-day="{% url 'elpriser:api_day' %}"
      data-url-days="{% url 'elpriser:api_days' %}"
      data-url-profile="{% url 'elpriser:api_profile' %}"
-     data-today="{{ today }}">
+     data-today="{{ today }}"
+     data-grid-available="{% if grid_configured %}1{% else %}0{% endif %}">
 
   <div class="d-flex flex-wrap justify-content-between align-items-start gap-2 mb-3">
     <div>
@@ -68,7 +69,16 @@
       <input class="form-check-input" type="checkbox" role="switch" id="opt-vat">
       <label class="form-check-label" for="opt-vat">Inkl. moms</label>
     </div>
+    {% if grid_configured %}
+      <div class="form-check form-switch mb-0">
+        <input class="form-check-input" type="checkbox" role="switch" id="opt-grid">
+        <label class="form-check-label" for="opt-grid">Inkl. nettarif m.m. <a href="{% url 'elpriser:grid' %}" class="small ms-1" title="Ret nettarif og tillæg"><i class="bi bi-gear"></i></a></label>
+      </div>
+    {% elif user.is_authenticated %}
+      <a href="{% url 'elpriser:grid' %}" class="small"><i class="bi bi-plus-circle me-1"></i>Medregn din nettarif</a>
+    {% endif %}
   </div>
+  <div id="grid-note" class="alert alert-info py-2 small d-none" role="status"></div>
 
   <div class="row g-3 mb-3" id="stats">
     <div class="col-6 col-lg"><div class="card h-100 text-center"><div class="card-body py-3">
@@ -103,6 +113,7 @@
         <span><span class="legend-dot" style="background: var(--bs-warning)"></span>Midt imellem</span>
         <span><span class="legend-dot" style="background: var(--bs-danger)"></span>Dyreste tredjedel</span>
         <span><span class="legend-dot legend-now"></span>Nu</span>
+        <span id="legend-grid" class="d-none"><span class="legend-dot" style="background: var(--bs-gray-500)"></span>Nettarif m.m.</span>
       </div>
       <details class="mt-3">
         <summary class="small">Vis som tabel</summary>
@@ -139,7 +150,7 @@
   <p class="small text-body-secondary">
     Priserne er <strong>day-ahead-spotpriser</strong> (Nord Pool) for prisområde DK1 (Vestdanmark) og DK2 (Østdanmark)
     og er <strong>uden</strong> nettarif, elafgift, abonnement og leverandørtillæg, så de er ikke det, du betaler pr. kWh.
-    «Inkl. moms» lægger kun de 25 % moms oven på spotprisen. Tider er dansk tid.
+    «Inkl. moms» lægger 25 % moms oven på. «Inkl. nettarif m.m.» (kræver login og dine egne indstillinger) lægger dit netselskabs tarif og dine øvrige tillæg på. Tider er dansk tid.
     Kilde: <a href="https://www.energidataservice.dk/" rel="noopener">Energi Data Service</a> (Energinet).
   </p>
 </div>

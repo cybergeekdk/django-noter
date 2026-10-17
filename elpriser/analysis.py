@@ -112,3 +112,34 @@ def hour_profile(area, first, last):
     for row in SpotPrice.objects.filter(area=area, time__gte=start, time__lt=end).only("time", "price_dkk_mwh"):
         buckets[row.time.astimezone(DK_TZ).hour].append(float(row.price_dkk_mwh))
     return [(hour, sum(v) / len(v)) for hour, v in sorted(buckets.items())]
+
+
+def _day_rows(area, first, last, pricing):
+    """[(tid, DKK/MWh)] for perioden, med nettarif og tillæg hvis `pricing` er givet."""
+    from . import grid
+
+    start, _ = day_bounds(first)
+    _, end = day_bounds(last)
+    rows = SpotPrice.objects.filter(area=area, time__gte=start, time__lt=end).order_by("time")
+    points = [(row.time, float(row.price_dkk_mwh)) for row in rows]
+    return grid.apply(points, pricing) if pricing else points
+
+
+def daily_averages_with_grid(area, first, last, pricing):
+    """Som `daily_averages`, men med nettarif og tillæg. Dage uden tarif udelades (så tallene ikke vildleder)."""
+    buckets = defaultdict(list)
+    for moment, price in _day_rows(area, first, last, pricing):
+        local = moment.astimezone(DK_TZ)
+        if pricing.has_data(local.date()):
+            buckets[local.date()].append(price)
+    return [(day, sum(v) / len(v), min(v), max(v)) for day, v in sorted(buckets.items())]
+
+
+def hour_profile_with_grid(area, first, last, pricing):
+    """Som `hour_profile`, men med nettarif og tillæg (kun dage, hvor tariffen kendes)."""
+    buckets = defaultdict(list)
+    for moment, price in _day_rows(area, first, last, pricing):
+        local = moment.astimezone(DK_TZ)
+        if pricing.has_data(local.date()):
+            buckets[local.hour].append(price)
+    return [(hour, sum(v) / len(v)) for hour, v in sorted(buckets.items())]

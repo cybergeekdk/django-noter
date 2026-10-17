@@ -5,7 +5,9 @@
 
   // --- tilstand (gemmes i adressen, så et valg kan deles) -------------------------------------
   const params = new URLSearchParams(location.search);
+  const gridAvailable = root.dataset.gridAvailable === "1";
   const state = {
+    grid: params.get("nettarif") === null ? gridAvailable : gridAvailable && params.get("nettarif") === "1",
     area: ["DK1", "DK2"].includes(params.get("omraade")) ? params.get("omraade") : "DK1",
     date: /^\d{4}-\d{2}-\d{2}$/.test(params.get("dato") || "") ? params.get("dato") : root.dataset.today,
     hourly: params.get("opl") === "time",
@@ -16,6 +18,13 @@
   const fmt = (value, digits = 1) =>
     value == null ? "–" : value.toLocaleString("da-DK", { minimumFractionDigits: digits, maximumFractionDigits: digits });
   const css = (name) => getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+  const unitText = (data) => data.unit + (data.grid && data.grid.enabled ? " inkl. nettarif m.m." : "");
+  const showGridNote = (data) => {
+    const note = $("grid-note");
+    const text = state.grid && data.grid && !data.grid.enabled ? data.grid.reason : "";
+    note.textContent = text || "";
+    note.classList.toggle("d-none", !text);
+  };
   const showError = (message) => {
     const box = $("error-box");
     box.textContent = message || "";
@@ -72,34 +81,46 @@
     if (!data) return;
     const points = data.points;
     $("day-empty").classList.toggle("d-none", data.has_data);
-    $("day-unit").textContent = data.unit + (data.vat ? " inkl. moms" : "");
+    $("day-unit").textContent = unitText(data) + (data.vat ? ", inkl. moms" : "");
     const weekday = new Date(data.date + "T12:00:00Z").toLocaleDateString("da-DK", { weekday: "long", day: "numeric", month: "long", timeZone: "UTC" });
     $("day-title").textContent = `Pris pr. ${data.step_minutes >= 60 ? "time" : data.step_minutes + ". minut"} – ${weekday} (${data.area})`;
 
     const values = points.map((p) => p.v);
+    const stacked = !!(data.grid && data.grid.enabled && points.length && points[0].spot !== undefined);
     const currentIndex = data.current ? points.findIndex((p) => p.t === data.current.t) : -1;
     const body = css("--bs-body-color");
+    const common = { categoryPercentage: 1, barPercentage: 0.92 };
+    const outline = {
+      borderColor: values.map((_, i) => (i === currentIndex ? body : "transparent")),
+      borderWidth: values.map((_, i) => (i === currentIndex ? 2 : 0)),
+    };
+    // Med nettarif stables spotprisen (farvet efter dagens samlede pris) og nettarif m.m. (grå).
+    const datasets = stacked
+      ? [
+          { label: "Spotpris", data: points.map((p) => p.spot), backgroundColor: tercileColors(values), stack: "pris", ...common, ...outline },
+          { label: "Nettarif m.m.", data: points.map((p) => p.grid), backgroundColor: css("--bs-gray-500"), stack: "pris", ...common },
+        ]
+      : [{ data: values, backgroundColor: tercileColors(values), ...common, ...outline }];
+    const options = baseOptions(unitText(data));
+    if (stacked) { options.scales.x.stacked = true; options.scales.y.stacked = true; }
     draw("day", "chart-day", {
       type: "bar",
-      data: {
-        labels: points.map((p) => p.label),
-        datasets: [{
-          data: values,
-          backgroundColor: tercileColors(values),
-          borderColor: values.map((_, i) => (i === currentIndex ? body : "transparent")),
-          borderWidth: values.map((_, i) => (i === currentIndex ? 2 : 0)),
-          categoryPercentage: 1,
-          barPercentage: 0.92,
-        }],
-      },
+      data: { labels: points.map((p) => p.label), datasets },
       options: {
-        ...baseOptions(data.unit),
+        ...options,
         plugins: {
           legend: { display: false },
-          tooltip: { callbacks: { label: (ctx) => ` ${fmt(ctx.parsed.y, 2)} ${data.unit}` } },
+          tooltip: {
+            callbacks: {
+              label: (ctx) => ` ${ctx.dataset.label ? ctx.dataset.label + " " : ""}${fmt(ctx.parsed.y, 2)} ${data.unit}`,
+              footer: (items) => (stacked ? `I alt ${fmt(points[items[0].dataIndex].v, 2)} ${data.unit}` : ""),
+            },
+          },
         },
       },
     });
+    $("legend-grid").classList.toggle("d-none", !stacked);
+    showGridNote(data);
 
     $("day-table").innerHTML = points.map((p) => `<tr><td>${p.label}</td><td class="text-end">${fmt(p.v, 2)}</td></tr>`).join("");
 
@@ -128,7 +149,7 @@
         datasets: [{ data: values, backgroundColor: tercileColors(values), categoryPercentage: 1, barPercentage: 0.9 }],
       },
       options: {
-        ...baseOptions(data.unit),
+        ...baseOptions(unitText(data)),
         plugins: {
           legend: { display: false },
           tooltip: {
@@ -163,7 +184,7 @@
         }],
       },
       options: {
-        ...baseOptions(data.unit),
+        ...baseOptions(unitText(data)),
         plugins: {
           legend: { display: false },
           tooltip: { callbacks: { title: (items) => `kl. ${items[0].label}`, label: (ctx) => ` Gns. ${fmt(ctx.parsed.y, 2)} ${data.unit}` } },
@@ -173,7 +194,7 @@
   }
 
   // --- indlæsning -----------------------------------------------------------------------------
-  const common = () => ({ omraade: state.area, moms: state.vat ? "1" : "0" });
+  const common = () => ({ omraade: state.area, moms: state.vat ? "1" : "0", ...(state.grid && { nettarif: "1" }) });
 
   function syncControls() {
     document.querySelectorAll("#area-group [data-area]").forEach((b) => b.classList.toggle("active", b.dataset.area === state.area));
@@ -181,7 +202,8 @@
     $("day-input").value = state.date;
     $("opt-hourly").checked = state.hourly;
     $("opt-vat").checked = state.vat;
-    const query = new URLSearchParams({ omraade: state.area, dato: state.date, dage: state.days, ...(state.hourly && { opl: "time" }), ...(state.vat && { moms: "1" }) });
+    if ($("opt-grid")) $("opt-grid").checked = state.grid;
+    const query = new URLSearchParams({ omraade: state.area, dato: state.date, dage: state.days, ...(state.hourly && { opl: "time" }), ...(state.vat && { moms: "1" }), ...(gridAvailable && { nettarif: state.grid ? "1" : "0" }) });
     history.replaceState(null, "", `?${query}`);
   }
 
@@ -226,6 +248,7 @@
   $("day-input").addEventListener("change", (e) => e.target.value && setDate(e.target.value));
   $("opt-hourly").addEventListener("change", (e) => { state.hourly = e.target.checked; syncControls(); loadDay(); });
   $("opt-vat").addEventListener("change", (e) => { state.vat = e.target.checked; reloadAll(); });
+  if ($("opt-grid")) $("opt-grid").addEventListener("change", (e) => { state.grid = e.target.checked; reloadAll(); });
 
   // Tema-skift: tegn graferne igen med de nye farver.
   new MutationObserver(() => { renderDay(); renderDays(); renderProfile(); })

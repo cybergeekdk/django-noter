@@ -16,7 +16,7 @@ from django.db.models import Q
 from django.urls import reverse
 from django.utils import timezone
 
-from . import analysis, push
+from . import analysis, grid, push
 from .models import AlertLog, CheapPowerAlert
 from .service import DK_TZ
 
@@ -43,6 +43,9 @@ class DayReport:
     day: date
     cheap: list = field(default_factory=list)
     expensive: list = field(default_factory=list)
+    window: "Period | None" = None  # billigste 3 timer i træk (tip til vaskemaskine o.l.)
+    with_grid: bool = False  # priserne er inkl. nettarif og tillæg
+    grid_missing: bool = False  # nettarif ønsket, men mangler for dagen
 
     @property
     def has_any(self):
@@ -81,8 +84,11 @@ def find_periods(points, step, threshold, vat, min_minutes, above=False):
     return periods
 
 
-def day_report(alert, day):
-    """`DayReport` for dagen efter brugerens indstillinger, eller None, hvis dagens priser mangler/er ufuldstændige."""
+def day_report(alert, day, now=None):
+    """`DayReport` for dagen efter brugerens indstillinger, eller None, hvis dagens priser mangler/er ufuldstændige.
+
+    Med `now` (og dagen er i dag) regnes tippet kun på de timer, der endnu ikke er slut.
+    """
     points = analysis.day_points(alert.area, day)
     if not points:
         return None
@@ -93,6 +99,20 @@ def day_report(alert, day):
         return None
     minutes = alert.min_hours * 60
     report = DayReport(day)
+    if alert.include_grid:  # prisen inkl. nettarif og tillæg, hvis brugeren har dem og tariffen kendes for dagen
+        config = grid.settings_for(alert.user)
+        pricing = grid.Pricing(config) if config else None
+        if pricing and pricing.has_data(day):
+            points, report.with_grid = grid.apply(points, pricing), True
+        else:
+            report.grid_missing = True
+    window_points = points
+    if now is not None and day == now.astimezone(DK_TZ).date():
+        window_points = [(m, p) for m, p in points if m + timedelta(minutes=step) > now]
+    window = analysis.cheapest_window(window_points, step)
+    if window:
+        avg = analysis.to_ore_kwh(window["avg"], alert.incl_vat)
+        report.window = Period(window["start"], window["end"], avg, avg, avg)
     if alert.notify_cheap:
         report.cheap = find_periods(points, step, float(alert.threshold_ore), alert.incl_vat, minutes)
     if alert.warn_expensive:
@@ -137,6 +157,12 @@ def link_for(alert, day):
     return site_url(reverse("elpriser:index") + f"?omraade={alert.area}&dato={day.isoformat()}")
 
 
+def tip_line(report):
+    if not report.window:
+        return ""
+    return f"Tip til vaskemaskine/opvasker: kl. {span(report.window)} (3 timer, gennemsnit {fmt(report.window.avg)} øre/kWh)"
+
+
 def email_for(alert, reports, today):
     vat = "inkl. moms" if alert.incl_vat else "ekskl. moms"
     sections = []
@@ -149,15 +175,27 @@ def email_for(alert, reports, today):
             lines.append(f"Dyrt (over {fmt(float(alert.expensive_ore))} øre/kWh {vat}):")
             lines += [f"- kl. {span(p)} ({hours_text(p)} timer): gennemsnit {fmt(p.avg)} øre/kWh, højeste {fmt(p.high)}" for p in report.expensive]
         header = f"{day_word(report.day, today).capitalize()} ({report.day:%d/%m}):"
-        sections.append(header + "\n" + "\n".join(lines) + f"\n\nSe hele dagen: {link_for(alert, report.day)}")
+        tip = tip_line(report)
+        sections.append(
+            header + "\n" + "\n".join(lines) + (f"\n{tip}" if tip else "") + f"\n\nSe hele dagen: {link_for(alert, report.day)}"
+        )
     body = (
         f"Hej {alert.user.get_username()},\n\n"
         f"Her er prisbeskeden for {alert.area}:\n\n"
         + "\n\n".join(sections)
-        + "\n\nPriserne er spotpriser uden nettarif, afgifter og abonnement.\n"
+        + "\n\n" + price_note(alert, reports) + "\n"
         f"Du får denne besked, fordi du har slået den til. Ændre eller slå den fra: {site_url(reverse('elpriser:alerts'))}\n"
     )
     return EmailMessage(subject_for(alert, reports, today), body, to=[alert.user.email])
+
+
+def price_note(alert, reports):
+    if reports and all(r.with_grid for r in reports):
+        return f"Priserne er inkl. din nettarif og dine øvrige tillæg ({site_url(reverse('elpriser:grid'))})."
+    note = "Priserne er spotpriser uden nettarif, afgifter og abonnement."
+    if any(r.grid_missing for r in reports):
+        note += " Bemærk: du har bedt om pris inkl. nettarif, men tariffen mangler for en af dagene."
+    return note
 
 
 def push_text_for(alert, reports, today):
@@ -169,6 +207,8 @@ def push_text_for(alert, reports, today):
             parts.append("billigt " + ", ".join(f"kl. {span(p)} ({fmt(p.avg)} øre)" for p in report.cheap))
         if report.expensive:
             parts.append("dyrt " + ", ".join(f"kl. {span(p)} ({fmt(p.avg)} øre)" for p in report.expensive))
+        if report.window:
+            parts.append(f"tip til vask kl. {span(report.window)} ({fmt(report.window.avg)} øre)")
         lines.append(f"{day_word(report.day, today).capitalize()}: " + "; ".join(parts))
     return "\n".join(lines)
 
@@ -198,7 +238,7 @@ def due_alerts(now=None):
         for day in (today, today + timedelta(days=1)):
             if day in done:
                 continue
-            report = day_report(alert, day)
+            report = day_report(alert, day, now)
             if report is None:
                 continue
             if day == today:  # perioder, der allerede er slut, er ikke interessante

@@ -1,0 +1,175 @@
+{% extends "base.html" %}
+{% load static %}
+
+{% block title %}Nettarif{% endblock %}
+
+{% block content %}
+<nav aria-label="Sti">
+  <ol class="breadcrumb">
+    <li class="breadcrumb-item"><a href="{% url 'elpriser:index' %}">Elpriser</a></li>
+    <li class="breadcrumb-item active" aria-current="page">Nettarif</li>
+  </ol>
+</nav>
+
+<div class="row g-4">
+  <div class="col-lg-7">
+    <h1 class="mb-3"><i class="bi bi-diagram-3 me-2"></i>Nettarif og tillæg</h1>
+    <p class="text-body-secondary">
+      Spotprisen er kun en del af, hvad du betaler. Netselskabets tarif er ofte dyrest sidst på eftermiddagen. Her kan du
+      lægge den og dine øvrige tillæg oven på spotprisen, så graferne og beskederne kan vise prisen <strong>inkl. nettarif</strong>.
+    </p>
+
+    <form method="post" novalidate id="grid-form">
+      {% csrf_token %}
+      {% if form.non_field_errors %}<div class="alert alert-danger">{{ form.non_field_errors|join:" " }}</div>{% endif %}
+
+      <div class="mb-3">
+        {% for radio in form.source %}
+          <div class="form-check">
+            {{ radio.tag }}
+            <label class="form-check-label" for="{{ radio.id_for_label }}">{{ radio.choice_label }}</label>
+          </div>
+        {% endfor %}
+      </div>
+
+      <fieldset class="border rounded p-3 mb-3" id="source-datahub">
+        <legend class="float-none w-auto px-2 fs-6 mb-0">Netselskab</legend>
+        {% if company_count == 0 %}
+          <div class="alert alert-warning small">
+            Listen over netselskaber er tom.
+            {% if user.is_superuser %}Klik «Hent netselskaber» nedenfor.{% else %}Bed en administrator om at hente den (<code>manage.py fetch_nettariffer --companies</code>), eller tast timepriserne ind selv.{% endif %}
+          </div>
+        {% endif %}
+        <div class="row g-2 align-items-end mb-3">
+          <div class="col">
+            <label for="{{ form.company.id_for_label }}" class="form-label">{{ form.company.label }}</label>
+            {{ form.company }}
+            {% for error in form.company.errors %}<div class="text-danger small mt-1">{{ error }}</div>{% endfor %}
+          </div>
+          <div class="col-auto">
+            <button type="submit" name="action" value="reload" class="btn btn-outline-secondary">Vis tariffer</button>
+          </div>
+        </div>
+        <div>
+          <label for="{{ form.tariff_code.id_for_label }}" class="form-label">{{ form.tariff_code.label }}</label>
+          {{ form.tariff_code }}
+          {% for error in form.tariff_code.errors %}<div class="text-danger small mt-1">{{ error }}</div>{% endfor %}
+          <div class="form-text">Husdstande på almindelig elmåler har typisk «Nettarif C» (se din elregning). Skift netselskab, og tryk «Vis tariffer» for at se dets tariffer.</div>
+        </div>
+      </fieldset>
+
+      <fieldset class="border rounded p-3 mb-3" id="source-manual">
+        <legend class="float-none w-auto px-2 fs-6 mb-0">Dine timepriser</legend>
+        <p class="small text-body-secondary mb-2">
+          Nettarif pr. time <strong>uden moms</strong> i øre/kWh, som den står i dit netselskabs prisblad. Gælder alle dage; opdatér ved sæsonskifte.
+        </p>
+        <div class="row g-2">
+          {% for field in form.hour_fields %}
+            <div class="col-4 col-sm-3 col-md-2">
+              <label for="{{ field.id_for_label }}" class="form-label small mb-0">{{ field.label }}</label>
+              {{ field }}
+              {% for error in field.errors %}<div class="text-danger small">{{ error }}</div>{% endfor %}
+            </div>
+          {% endfor %}
+        </div>
+        <button type="button" class="btn btn-sm btn-outline-secondary mt-2" id="fill-all">Kopiér første felt til alle</button>
+      </fieldset>
+
+      <fieldset class="border rounded p-3 mb-4">
+        <legend class="float-none w-auto px-2 fs-6 mb-0">Øvrige tillæg (øre/kWh, uden moms)</legend>
+        <p class="small text-body-secondary">
+          Står på din elregning. Lad felterne stå på 0, hvis du ikke vil medregne dem. Disse tal hentes ikke automatisk, fordi de ændres af politiske beslutninger og af din leverandør.
+        </p>
+        <div class="row g-3">
+          {% for field in form %}{% if field.name == "elafgift_ore" or field.name == "energinet_ore" or field.name == "supplier_ore" %}
+            <div class="col-sm-4">
+              <label for="{{ field.id_for_label }}" class="form-label small">{{ field.label }}</label>
+              {{ field }}
+              {% for error in field.errors %}<div class="text-danger small mt-1">{{ error }}</div>{% endfor %}
+            </div>
+          {% endif %}{% endfor %}
+        </div>
+      </fieldset>
+
+      <div class="d-flex gap-2">
+        <button type="submit" name="action" value="save" class="btn btn-primary">Gem</button>
+        <a href="{% url 'elpriser:index' %}" class="btn btn-outline-secondary">Tilbage</a>
+      </div>
+    </form>
+
+    {% if user.is_superuser %}
+      <hr class="my-4">
+      <form method="post" action="{% url 'elpriser:grid_refresh_companies' %}" class="d-flex align-items-center gap-3">
+        {% csrf_token %}
+        <button type="submit" class="btn btn-sm btn-outline-secondary"><i class="bi bi-arrow-repeat me-1"></i>Hent netselskaber</button>
+        <span class="small text-body-secondary">{{ company_count }} netselskab{{ company_count|pluralize:"er" }} i databasen{% if latest_tariff %} · tariffer sidst hentet {{ latest_tariff.fetched|date:"j. M Y H:i" }}{% endif %}</span>
+      </form>
+    {% endif %}
+  </div>
+
+  <div class="col-lg-5">
+    <div class="card">
+      <div class="card-header">Din nettarif i dag</div>
+      <div class="card-body">
+        {% if preview %}
+          <p class="small text-body-secondary">
+            Nettarif{% if preview.fixed %} + tillæg ({{ preview.fixed|floatformat:"-2" }} øre){% endif %} pr. time, uden moms, i øre/kWh.
+          </p>
+          <div style="height: 260px"><canvas id="chart-tariff" role="img" aria-label="Nettarif pr. time i dag"></canvas></div>
+          {{ preview|json_script:"tariff-data" }}
+        {% elif config.configured %}
+          <div class="alert alert-warning small mb-0">Der er ingen tarif for i dag i databasen. Kør <code>manage.py fetch_nettariffer</code>.</div>
+        {% else %}
+          <div class="alert alert-secondary small mb-0">Vælg netselskab og tarif (eller tast egne priser ind), og gem, for at se tariffen her.</div>
+        {% endif %}
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}
+
+{% block extra_js %}
+{% if preview %}<script src="{% static 'vendor/chartjs/chart.umd.min.js' %}"></script>{% endif %}
+<script>
+  (() => {
+    const form = document.getElementById("grid-form");
+    const sections = { datahub: document.getElementById("source-datahub"), manual: document.getElementById("source-manual") };
+    const show = () => {
+      const chosen = form.querySelector("input[name=source]:checked");
+      for (const [name, el] of Object.entries(sections)) el.classList.toggle("d-none", !!chosen && chosen.value !== name);
+    };
+    form.querySelectorAll("input[name=source]").forEach((r) => r.addEventListener("change", show));
+    show();
+    document.getElementById("fill-all").addEventListener("click", () => {
+      const first = form.querySelector("#id_hour_0").value;
+      for (let h = 1; h < 24; h++) form.querySelector(`#id_hour_${h}`).value = first;
+    });
+    form.querySelector("select[name=company]").addEventListener("change", () => {
+      const button = document.createElement("input");
+      button.type = "hidden"; button.name = "action"; button.value = "reload";
+      form.appendChild(button); form.submit();
+    });
+
+    const data = document.getElementById("tariff-data");
+    if (data && window.Chart) {
+      const info = JSON.parse(data.textContent);
+      const css = (n) => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
+      new Chart(document.getElementById("chart-tariff"), {
+        type: "bar",
+        data: {
+          labels: info.total.map((_, h) => String(h).padStart(2, "0")),
+          datasets: [{ data: info.total, backgroundColor: css("--bs-primary") }],
+        },
+        options: {
+          responsive: true, maintainAspectRatio: false, animation: false,
+          plugins: { legend: { display: false }, tooltip: { callbacks: { label: (c) => ` ${c.parsed.y.toFixed(2)} øre/kWh` } } },
+          scales: {
+            x: { ticks: { color: css("--bs-body-color") }, grid: { display: false } },
+            y: { ticks: { color: css("--bs-body-color") }, grid: { color: css("--bs-border-color") }, title: { display: true, text: "øre/kWh", color: css("--bs-body-color") } },
+          },
+        },
+      });
+    }
+  })();
+</script>
+{% endblock %}

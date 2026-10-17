@@ -207,6 +207,52 @@ På indstillingssiden kan man sende sig selv en testmail og en test til telefone
 > `elpriser/push.py` (JSON-post til serverens rod-adresse) er kun testet med en erstattet forbindelse.
 > Brug knappen «Send test til telefonen» for at se, at det virker i dit setup.
 
+### Pris inkl. nettarif
+
+Spotprisen er kun en del af, hvad man betaler. Under **Nettarif** (`/elpriser/nettarif/`, kræver login) kan man
+lægge sit netselskabs tarif og sine øvrige tillæg oven på spotprisen. Så kan graferne vise prisen **inkl.
+nettarif m.m.** (en kontakt på elpris-siden, slået til som standard, når man har udfyldt indstillingerne),
+og beskederne kan sammenligne grænserne med den samlede pris.
+
+- **Kilde:** enten hentes tariffen fra Energinets prisliste (`DatahubPricelist`): man vælger netselskab og tarif
+  (typisk «Nettarif C»), og siden viser tarifferne pr. time. Eller man **taster selv 24 timepriser** ind (øre/kWh uden
+  moms) fra netselskabets prisblad. Det er en reserve, der virker uden API'et.
+- **Øvrige tillæg** (øre/kWh uden moms): elafgift, Energinets tariffer og leverandørtillæg indtastes selv fra
+  elregningen. De hentes bevidst ikke automatisk, fordi de ændres politisk og afhænger af leverandøren. Lad dem stå
+  på 0 for ikke at medregne dem. Abonnement (fast beløb) indgår ikke, da det ikke er pr. kWh.
+- **Beregning:** spotpris + tarif for den danske time + tillæg, og til sidst evt. 25 % moms. Sommer- og vintertarif
+  vælges ud fra gyldighedsperioden. Dage, hvor tariffen ikke kendes, udelades af gennemsnit og døgnprofil i stedet for at
+  vildlede, og siden siger det.
+- **Privatliv:** indstillingerne er den enkelte brugers egne. API-svar med nettarif ligger kun i brugerens egen
+  cache (`private`, `Vary: Cookie`), aldrig i en fælles.
+- **Beskeder** får en linje med det **billigste 3-timers vindue** («tip til vaskemaskine/opvasker»), og man kan
+  vælge «medregn nettarif og tillæg» (er tariffen ikke kendt for dagen, siger mailen det og bruger spotprisen).
+
+Tariffer hentes med en kommando, som kun henter for de netselskaber, brugerne har valgt. De ændres sjældent
+(typisk ved årsskifte og kvartalsskifte), så fx én gang om ugen er rigeligt:
+
+```bash
+python manage.py fetch_nettariffer --companies   # opdatér netselskab-listen og hent tariffer for de valgte
+python manage.py fetch_nettariffer               # kun tariffer for de valgte netselskaber
+python manage.py fetch_nettariffer --gln 5790…   # hent også et bestemt netselskab
+python manage.py fetch_nettariffer --check-api   # kontrollér forbindelse og datasættets opbygning
+```
+
+```cron
+30 4 * * 1  cd /sti/til/django_projekt && .venv/bin/python manage.py fetch_nettariffer --companies
+```
+
+Vælger man et netselskab, hvis tariffer endnu ikke er hentet, forsøger siden selv at hente dem med det samme.
+Super admins har knappen **Hent netselskaber** på nettarif-siden.
+
+> **Nettariffer er ikke testet mod rigtige Energinet-data.** Netværket var spærret under udviklingen, så
+> `elpriser/grid_client.py` er skrevet efter den opbygning af `DatahubPricelist`, jeg kender (`GLN_Number`,
+> `ChargeType` `D03`, `ChargeTypeCode`, `Note`, `ValidFrom`/`ValidTo` og `Price1`…`Price24` i DKK/kWh uden moms), og
+> testene bruger en erstattet forbindelse. Kør `fetch_nettariffer --check-api`: den viser kolonner og et eksempel
+> med prisen omregnet til øre/kWh, så du kan sammenligne med dit netselskabs prisblad. Afviger noget, fejler den
+> tydeligt og gemmer intet. Gyldighedstidspunkter uden tidszone forstås som dansk tid. Virker hentningen ikke,
+> kan du taste timepriserne ind selv.
+
 > **Kør `python manage.py fetch_elpriser --check-api` første gang.** Koden blev skrevet i et miljø
 > uden adgang til Energinets API og dokumentation, så datasættets navn og kolonner (`DayAheadPrices`
 > med `TimeUTC`, `PriceArea`, `DayAheadPriceDKK`) er bygget efter, hvad der var kendt, og testene

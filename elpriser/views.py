@@ -6,15 +6,15 @@ from django.contrib.auth.decorators import login_required, user_passes_test
 from django.http import JsonResponse
 from django.shortcuts import redirect, render
 from django.utils import dateformat, timezone
-from django.views.decorators.cache import cache_control
+from django.utils.cache import patch_vary_headers
 from django.views.decorators.http import require_GET, require_POST
 
 from . import alerts as alert_logic
-from . import analysis, push
-from .forms import AlertForm
+from . import analysis, grid, push
+from .forms import AlertForm, GridForm
 from .client import VALID_AREAS, EnergiDataError
-from .models import CheapPowerAlert, FetchRun, SpotPrice
-from .service import DK_TZ, local_today, update_prices
+from .models import CheapPowerAlert, FetchRun, GridCompany, GridSettings, GridTariff, SpotPrice
+from .service import DK_TZ, local_today, update_companies, update_prices, update_tariffs
 
 STALE_AFTER = timedelta(hours=26)
 MAX_DAYS = 366
@@ -56,36 +56,68 @@ def json_api(view):
     """Fælles for JSON-endpoints: kun GET, korte svar-cache og 400 ved ugyldige parametre."""
 
     @require_GET
-    @cache_control(public=True, max_age=60)
     def wrapper(request):
         try:
-            return JsonResponse(view(request))
+            response = JsonResponse(view(request))
         except BadParameter as error:
             return JsonResponse({"error": str(error)}, status=400)
+        if request.GET.get("nettarif") == "1":
+            # Svaret afhænger af brugerens egne indstillinger og må ikke ligge i en fælles cache.
+            response["Cache-Control"] = "private, max-age=60"
+            patch_vary_headers(response, ["Cookie"])
+        else:
+            response["Cache-Control"] = "public, max-age=60"
+        return response
 
     wrapper.__name__ = view.__name__
     return wrapper
 
 
 def last_success():
-    return FetchRun.objects.filter(ok=True).order_by("-finished").first()
+    return FetchRun.objects.filter(ok=True).order_by("-started").first()
+
+
+def get_pricing(request):
+    """(Pricing eller None, info). Nettarif kræver ?nettarif=1, login og udfyldte indstillinger."""
+    info = {"requested": False, "enabled": False, "reason": None}
+    if request.GET.get("nettarif") != "1":
+        return None, info
+    info["requested"] = True
+    config = grid.settings_for(request.user)
+    if not request.user.is_authenticated:
+        info["reason"] = "Log ind for at se prisen inkl. nettarif."
+    elif config is None:
+        info["reason"] = "Du har ikke valgt netselskab og tarif endnu."
+    else:
+        info["enabled"] = True
+        return grid.Pricing(config), info
+    return None, info
 
 
 @json_api
 def api_day(request):
     area, day = get_area(request), get_day(request)
     vat, hourly = get_flag(request, "moms"), request.GET.get("opl") == "time"
+    pricing, grid_info = get_pricing(request)
+    if pricing and not pricing.has_data(day):
+        pricing, grid_info = None, {**grid_info, "enabled": False, "reason": "Der er ingen nettarif for den valgte dag."}
 
-    points = analysis.day_points(area, day)
-    step = analysis.step_minutes(points)
+    spot_points = analysis.day_points(area, day)
+    step = analysis.step_minutes(spot_points)
     if hourly and step < 60:
-        points, step = analysis.hourly(points), 60
+        spot_points, step = analysis.hourly(spot_points), 60
+    points = grid.apply(spot_points, pricing) if pricing else spot_points
+    spot_by_time = dict(spot_points)
 
     def value(price):
         return analysis.to_ore_kwh(price, vat)
 
     def labelled(moment, price):
-        return {"t": moment.astimezone(DK_TZ).isoformat(), "label": analysis.local_label(moment), "v": value(price)}
+        item = {"t": moment.astimezone(DK_TZ).isoformat(), "label": analysis.local_label(moment), "v": value(price)}
+        if pricing:  # opdeling i spotpris og nettarif m.m. til den stablede graf
+            item["spot"] = value(spot_by_time[moment])
+            item["grid"] = round(pricing.grid_ore(moment) * (analysis.VAT if vat else 1), 2)
+        return item
 
     summary = analysis.summarize(points)
     now_point = analysis.current_point(points, step, timezone.now())
@@ -96,6 +128,7 @@ def api_day(request):
         "date": day.isoformat(),
         "unit": "øre/kWh",
         "vat": vat,
+        "grid": grid_info,
         "step_minutes": step,
         "has_data": bool(points),
         "points": [labelled(m, p) for m, p in points],
@@ -120,13 +153,19 @@ def api_day(request):
 @json_api
 def api_days(request):
     area, days, vat = get_area(request), get_days(request), get_flag(request, "moms")
+    pricing, grid_info = get_pricing(request)
     last = local_today()  # perioden slutter i dag og er præcis `days` dage lang
     first = last - timedelta(days=days - 1)
-    rows = analysis.daily_averages(area, first, last)
+    rows = (
+        analysis.daily_averages_with_grid(area, first, last, pricing)
+        if pricing
+        else analysis.daily_averages(area, first, last)
+    )
     return {
         "area": area,
         "unit": "øre/kWh",
         "vat": vat,
+        "grid": grid_info,
         "days": [
             {
                 "date": day.isoformat(),
@@ -142,13 +181,19 @@ def api_days(request):
 @json_api
 def api_profile(request):
     area, days, vat = get_area(request), get_days(request), get_flag(request, "moms")
+    pricing, grid_info = get_pricing(request)
     last = local_today()
     first = last - timedelta(days=days - 1)
-    rows = analysis.hour_profile(area, first, last)
+    rows = (
+        analysis.hour_profile_with_grid(area, first, last, pricing)
+        if pricing
+        else analysis.hour_profile(area, first, last)
+    )
     return {
         "area": area,
         "unit": "øre/kWh",
         "vat": vat,
+        "grid": grid_info,
         "days": days,
         "hours": [{"hour": hour, "label": f"{hour:02d}", "v": analysis.to_ore_kwh(avg, vat)} for hour, avg in rows],
     }
@@ -166,6 +211,7 @@ def index(request):
         "stale": stale,
         "last_failed": latest if latest and not latest.ok else None,
         "alert": alert if alert and alert.enabled else None,
+        "grid_configured": grid.settings_for(request.user) is not None,
     }
     return render(request, "elpriser/index.html", context)
 
@@ -228,6 +274,7 @@ def alerts(request):
         "form": form,
         "preview": alert_preview(alert),
         "alert": alert,
+        "grid_configured": grid.settings_for(request.user) is not None,
         "ntfy_server": push.server(),
         "ntfy_url": push.topic_url(alert.ntfy_topic) if alert.ntfy_topic else "",
     }
@@ -278,3 +325,80 @@ def alerts_new_topic(request):
     alert.save(update_fields=["ntfy_topic"])
     messages.success(request, "Du har fået et nyt emne. Abonnér på det i ntfy-appen og fjern det gamle.")
     return redirect("elpriser:alerts")
+
+
+# --- Nettarif --------------------------------------------------------------------------------------
+
+
+def grid_preview(config):
+    """24 værdier (øre/kWh uden moms) for i dag: nettarif og faste tillæg, til visning på indstillingssiden."""
+    pricing = grid.Pricing(config)
+    hours = pricing.hour_tariffs(local_today())
+    if hours is None:
+        return None
+    fixed = config.fixed_ore
+    return {"tariff": [round(h, 2) for h in hours], "fixed": round(fixed, 2), "total": [round(h + fixed, 2) for h in hours]}
+
+
+def fetch_tariffs_if_missing(request, company):
+    """Henter tariffer for netselskabet med det samme, hvis der ingen er (så valget virker uden at vente på cron)."""
+    if company is None or GridTariff.objects.filter(gln=company.gln).exists():
+        return
+    try:
+        new, updated = update_tariffs([company.gln])
+    except EnergiDataError as error:
+        messages.warning(request, f"Kunne ikke hente tariffer for {company.name}: {error}")
+    except Exception as error:
+        messages.warning(request, f"Uventet fejl ved hentning af tariffer: {type(error).__name__}: {error}")
+    else:
+        if new + updated == 0:
+            messages.warning(request, f"Energinet har ingen tariffer for {company.name}.")
+
+
+@login_required
+def grid_settings(request):
+    config = GridSettings.objects.get_or_create(user=request.user)[0]
+    status = 200
+    if request.method == "POST":
+        company_id = request.POST.get("company", "")
+        company = GridCompany.objects.filter(pk=company_id).first() if company_id.isdigit() else None
+        if request.POST.get("action") == "reload":
+            # Kun skift af netselskab: vis dets tariffer uden at gemme eller validere resten.
+            fetch_tariffs_if_missing(request, company)
+            form = GridForm(initial={"source": request.POST.get("source") or config.source, "company": company},
+                            user=request.user, instance=config, selected_company=company or False)
+        else:
+            fetch_tariffs_if_missing(request, company)
+            form = GridForm(request.POST, user=request.user, instance=config)
+            if form.is_valid():
+                form.save()
+                messages.success(request, "Nettarif-indstillingerne er gemt.")
+                return redirect("elpriser:grid")
+            status = 400
+    else:
+        form = GridForm(user=request.user, instance=config)
+    config.refresh_from_db()
+    context = {
+        "form": form,
+        "preview": grid_preview(config) if config.configured else None,
+        "company_count": GridCompany.objects.count(),
+        "config": config,
+        "latest_tariff": GridTariff.objects.order_by("-fetched").first(),
+    }
+    return render(request, "elpriser/grid.html", context, status=status)
+
+
+@login_required
+@user_passes_test(lambda user: user.is_superuser)
+@require_POST
+def grid_refresh_companies(request):
+    """Henter listen over netselskaber nu (kun super admin)."""
+    try:
+        count = update_companies()
+    except EnergiDataError as error:
+        messages.error(request, f"Hentningen fejlede: {error}")
+    except Exception as error:
+        messages.error(request, f"Uventet fejl ved hentning: {type(error).__name__}: {error}")
+    else:
+        messages.success(request, f"Listen over netselskaber er opdateret ({count} selskaber).")
+    return redirect("elpriser:grid")

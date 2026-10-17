@@ -78,6 +78,7 @@ class CheapPowerAlert(models.Model):
         validators=[MinValueValidator(-100), MaxValueValidator(1000)],
         help_text="øre/kWh (samme moms-valg som grænsen for billig).",
     )
+    include_grid = models.BooleanField("medregn nettarif og tillæg", default=False)
     notify_email = models.BooleanField("send e-mail", default=True)
     notify_phone = models.BooleanField("send besked til telefonen (ntfy)", default=False)
     ntfy_topic = models.CharField(max_length=64, blank=True, editable=False)
@@ -108,3 +109,78 @@ class AlertLog(models.Model):
 
     def __str__(self):
         return f"{self.user} {self.date} ({'sendt' if self.sent else 'ingen billige perioder'})"
+
+
+class GridCompany(models.Model):
+    """Et netselskab (fra Energinets prisliste). `gln` er netselskabets unikke nummer i Datahub."""
+
+    gln = models.CharField("GLN", max_length=13, unique=True)
+    name = models.CharField("navn", max_length=200)
+
+    class Meta:
+        ordering = ["name"]
+        verbose_name = "netselskab"
+        verbose_name_plural = "netselskaber"
+
+    def __str__(self):
+        return self.name
+
+
+class GridTariff(models.Model):
+    """En nettarif fra Energinets prisliste, gyldig i en periode, med en pris for hver time på døgnet.
+
+    Priserne gemmes som i Datahub: DKK/kWh uden moms. Gyldighed er danske kalenderdage; sommer- og
+    vintertariffer er to rækker med hver sin periode.
+    """
+
+    gln = models.CharField("netselskabets GLN", max_length=13, db_index=True)
+    code = models.CharField("tarifkode", max_length=40)
+    name = models.CharField("navn", max_length=300, blank=True)
+    valid_from = models.DateField("gælder fra")
+    valid_to = models.DateField("gælder til (ekskl.)", null=True, blank=True)
+    hour_prices = models.JSONField("pris pr. time (DKK/kWh, 24 værdier)")
+    fetched = models.DateTimeField("hentet", auto_now=True)
+
+    class Meta:
+        ordering = ["gln", "code", "-valid_from"]
+        verbose_name = "nettarif"
+        verbose_name_plural = "nettariffer"
+        constraints = [models.UniqueConstraint(fields=["gln", "code", "valid_from"], name="unique_gridtariff_period")]
+
+    def __str__(self):
+        return f"{self.gln} {self.code} fra {self.valid_from}"
+
+
+class GridSettings(models.Model):
+    """Brugerens nettarif og øvrige tillæg, så graferne og beskederne kan vise prisen inkl. nettarif."""
+
+    class Source(models.TextChoices):
+        DATAHUB = "datahub", "Hent fra Energinet (vælg netselskab)"
+        MANUAL = "manual", "Tast timepriser ind selv"
+
+    user = models.OneToOneField(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name="grid_settings")
+    source = models.CharField("kilde", max_length=10, choices=Source.choices, default=Source.DATAHUB)
+    company = models.ForeignKey(GridCompany, null=True, blank=True, on_delete=models.SET_NULL, related_name="+")
+    tariff_code = models.CharField("tarif", max_length=40, blank=True)
+    manual_hours = models.JSONField("egne timepriser (øre/kWh)", default=list, blank=True)
+    elafgift_ore = models.DecimalField("elafgift", max_digits=7, decimal_places=3, default=0, validators=[MinValueValidator(0), MaxValueValidator(1000)])
+    energinet_ore = models.DecimalField("Energinets tariffer", max_digits=7, decimal_places=3, default=0, validators=[MinValueValidator(0), MaxValueValidator(1000)])
+    supplier_ore = models.DecimalField("leverandørtillæg", max_digits=7, decimal_places=3, default=0, validators=[MinValueValidator(0), MaxValueValidator(1000)])
+
+    class Meta:
+        verbose_name = "nettarif-indstilling"
+        verbose_name_plural = "nettarif-indstillinger"
+
+    def __str__(self):
+        return f"{self.user} ({self.source})"
+
+    @property
+    def fixed_ore(self):
+        """Faste tillæg pr. kWh (øre, uden moms), som ikke afhænger af tidspunktet."""
+        return float(self.elafgift_ore + self.energinet_ore + self.supplier_ore)
+
+    @property
+    def configured(self):
+        if self.source == self.Source.MANUAL:
+            return len(self.manual_hours) == 24
+        return bool(self.company_id and self.tariff_code)

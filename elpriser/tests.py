@@ -613,7 +613,8 @@ class AlertSendingTests(TestCase):
         self.assertIn("(DK1)", message.subject)
         self.assertIn("2 perioder", message.subject)
         self.assertIn("kl. 00:00–06:00 (6 timer): gennemsnit 37,5 øre/kWh", message.body)  # 300 DKK/MWh = 30 øre + moms
-        self.assertIn("kl. 12:00–15:00 (3 timer): gennemsnit 25,0 øre/kWh, laveste 25,0\n\nSe hele dagen:", message.body)
+        self.assertIn("- kl. 12:00–15:00 (3 timer): gennemsnit 25,0 øre/kWh, laveste 25,0\n", message.body)
+        self.assertIn("Tip til vaskemaskine/opvasker: kl. 12:00–15:00 (3 timer, gennemsnit 25,0 øre/kWh)\n\nSe hele dagen:", message.body)
         self.assertIn("inkl. moms", message.body)
         self.assertIn("dato=2026-06-16", message.body)
         self.assertIn("/elpriser/besked/", message.body)
@@ -682,7 +683,8 @@ class AlertSendingTests(TestCase):
         self.alert.save()
         self.send()
         self.assertIn("00:00–06:00", mail.outbox[0].body)
-        self.assertNotIn("12:00–15:00", mail.outbox[0].body)  # kun 3 timer
+        self.assertNotIn("- kl. 12:00–15:00", mail.outbox[0].body)  # kun 3 timer: ikke en periode, men stadig vaskemaskine-tippet
+        self.assertIn("Tip til vaskemaskine/opvasker: kl. 12:00–15:00", mail.outbox[0].body)
 
     def test_works_with_quarter_hour_data(self):
         make_day(day=self.tomorrow, step=15, price=cheap_pattern)
@@ -1269,3 +1271,714 @@ class PhonePageTests(TestCase):
         self.assertEqual(hours_of(today["expensive"]), [("15:00", "20:00")])
         self.assertEqual(page.context["preview"]["expensive_share"], round(100 * 5 / 24))
         self.assertContains(page, "dyr")
+
+
+# --- Nettarif (netselskabets priser) -------------------------------------------------------------
+# Som for spotpriserne: netværkskaldene er erstattet, og svarene er bygget efter den forventede
+# opbygning af Energinets prisliste (DatahubPricelist). IKKE verificeret mod det rigtige API.
+
+from . import grid, grid_client  # noqa: E402
+from .models import GridCompany, GridSettings, GridTariff  # noqa: E402
+
+GLN = "5790000000001"
+# Nettarif pr. dansk time i DKK/kWh: nat 0,10, dag 0,20, spids (17–21) 0,60, aften 0,20  ->  10 / 20 / 60 / 20 øre
+TARIFF_DKK = [0.10] * 6 + [0.20] * 11 + [0.60] * 4 + [0.20] * 3
+TARIFF_ORE = [round(p * 100, 2) for p in TARIFF_DKK]
+
+
+def pricelist_record(**overrides):
+    record = {
+        "ChargeOwner": "Testnet A/S", "GLN_Number": GLN, "ChargeType": "D03", "ChargeTypeCode": "CTC",
+        "Note": "Nettarif C", "ValidFrom": "2026-01-01T00:00:00", "ValidTo": None,
+        **{f"Price{i + 1}": p for i, p in enumerate(TARIFF_DKK)},
+    }
+    record.update(overrides)
+    return record
+
+
+def make_tariff(gln=GLN, code="CTC", name="Nettarif C", valid_from=date(2026, 1, 1), valid_to=None, prices=None):
+    return GridTariff.objects.create(gln=gln, code=code, name=name, valid_from=valid_from, valid_to=valid_to,
+                                     hour_prices=list(prices or TARIFF_DKK))
+
+
+class GridParseTests(SimpleTestCase):
+    def test_parses_tariff_with_hourly_prices_and_dates(self):
+        (row,) = grid_client.parse_tariffs([pricelist_record(ValidTo="2026-04-01T00:00:00")])
+        self.assertEqual((row.gln, row.code, row.name), (GLN, "CTC", "Nettarif C"))
+        self.assertEqual((row.valid_from, row.valid_to), (date(2026, 1, 1), date(2026, 4, 1)))
+        self.assertEqual(list(row.hour_prices), TARIFF_DKK)
+
+    def test_open_ended_validity(self):
+        for value in (None, "", "9999-12-31T00:00:00"):
+            (row,) = grid_client.parse_tariffs([pricelist_record(ValidTo=value)])
+            self.assertIsNone(row.valid_to)
+
+    def test_timestamps_with_zone_are_converted_to_danish_dates(self):
+        (row,) = grid_client.parse_tariffs([pricelist_record(ValidFrom="2025-12-31T23:00:00+00:00")])
+        self.assertEqual(row.valid_from, date(2026, 1, 1))  # 23:00 UTC = 00:00 dansk tid
+
+    def test_flat_tariff_with_only_price1(self):
+        record = {k: v for k, v in pricelist_record(Price1=0.25).items() if not (k.startswith("Price") and k != "Price1")}
+        (row,) = grid_client.parse_tariffs([record])
+        self.assertEqual(set(row.hour_prices), {0.25})
+        self.assertEqual(len(row.hour_prices), 24)
+        record2 = pricelist_record(Price1=0.25, Price7=None)  # enkelt time uden pris: Price1 bruges
+        self.assertEqual(grid_client.parse_tariffs([record2])[0].hour_prices[6], 0.25)
+
+    def test_subscriptions_fees_and_unpriced_rows_are_skipped(self):
+        rows = grid_client.parse_tariffs([
+            pricelist_record(ChargeType="D02"), pricelist_record(ChargeType="D01"),
+            pricelist_record(Price1=None), pricelist_record(ChargeType="Tarif", ChargeTypeCode="TXT"),
+        ])
+        self.assertEqual([r.code for r in rows], ["TXT"])
+
+    def test_name_falls_back_to_description_then_code(self):
+        self.assertEqual(grid_client.parse_tariffs([pricelist_record(Note=None, Description="Beskrivelse")])[0].name, "Beskrivelse")
+        self.assertEqual(grid_client.parse_tariffs([pricelist_record(Note=None)])[0].name, "CTC")
+
+    def test_missing_columns_fail_loudly(self):
+        with self.assertRaises(EnergiDataError) as ctx:
+            grid_client.parse_tariffs([{"Navn": "x", "Pris": 1}])
+        self.assertIn("ChargeTypeCode", str(ctx.exception))
+        self.assertIn("Pris", str(ctx.exception))
+        self.assertIn("check-api", str(ctx.exception))
+
+    def test_garbage_fails(self):
+        for bad in ([pricelist_record(Price3="abc")], [pricelist_record(ValidFrom="i går")], ["tekst"]):
+            with self.assertRaises(EnergiDataError):
+                grid_client.parse_tariffs(bad)
+
+    def test_companies(self):
+        companies = grid_client.parse_companies([
+            pricelist_record(), pricelist_record(),  # dublet
+            pricelist_record(ChargeOwner="Andet Net", GLN_Number="5790000000002"),
+            pricelist_record(ChargeOwner="Kun abonnement", GLN_Number="5790000000003", ChargeType="D02"),
+        ])
+        self.assertEqual(companies, {GLN: "Testnet A/S", "5790000000002": "Andet Net"})
+
+    def test_companies_missing_columns(self):
+        with self.assertRaisesMessage(EnergiDataError, "GLN_Number"):
+            grid_client.parse_companies([{"ChargeOwner": "x"}])
+
+
+class GridFetchTests(SimpleTestCase):
+    def test_tariff_url_filters_on_gln(self):
+        url = grid_client.build_url({"GLN_Number": [GLN]})
+        self.assertIn("/dataset/DatahubPricelist?", url)
+        self.assertIn("limit=0", url)
+        self.assertIn("GLN_Number", url)
+
+    def test_fetch_companies_falls_back_to_unfiltered_when_empty(self):
+        empty = fake_urlopen({"total": 0, "records": []}).return_value
+        full = fake_urlopen({"total": 1, "records": [pricelist_record()]}).return_value
+        opener = mock.Mock(side_effect=[empty, full])
+        with mock.patch("elpriser.client.urllib.request.urlopen", opener):
+            self.assertEqual(grid_client.fetch_companies(), {GLN: "Testnet A/S"})
+        self.assertEqual(opener.call_count, 2)
+        self.assertIn("filter", opener.call_args_list[0].args[0].full_url)
+        self.assertNotIn("filter", opener.call_args_list[1].args[0].full_url)
+
+    def test_truncated_and_malformed_responses(self):
+        for payload in ({"total": 9, "records": [pricelist_record()]}, {"nej": 1}, [1]):
+            with mock.patch("elpriser.client.urllib.request.urlopen", fake_urlopen(payload)), self.assertRaises(EnergiDataError):
+                grid_client.fetch_tariffs([GLN])
+
+    def test_fetch_tariffs_returns_rows(self):
+        with mock.patch("elpriser.client.urllib.request.urlopen", fake_urlopen({"total": 1, "records": [pricelist_record()]})):
+            self.assertEqual(len(grid_client.fetch_tariffs([GLN])), 1)
+
+
+class GridServiceTests(TestCase):
+    def test_update_companies_upserts_and_renames(self):
+        with mock.patch("elpriser.grid_client.fetch_companies", return_value={GLN: "Gammelt navn"}):
+            self.assertEqual(service.update_companies(), 1)
+        with mock.patch("elpriser.grid_client.fetch_companies", return_value={GLN: "Nyt navn", "5790000000002": "Andet"}):
+            service.update_companies()
+        self.assertEqual(dict(GridCompany.objects.values_list("gln", "name")), {GLN: "Nyt navn", "5790000000002": "Andet"})
+
+    def test_no_companies_is_an_error(self):
+        with mock.patch("elpriser.grid_client.fetch_companies", return_value={}), self.assertRaises(EnergiDataError):
+            service.update_companies()
+
+    def test_update_tariffs_is_idempotent_and_updates_prices(self):
+        row = grid_client.parse_tariffs([pricelist_record()])[0]
+        with mock.patch("elpriser.grid_client.fetch_tariffs", return_value=[row]):
+            self.assertEqual(service.update_tariffs([GLN]), (1, 0))
+            self.assertEqual(service.update_tariffs([GLN]), (0, 1))
+        cheaper = grid_client.parse_tariffs([pricelist_record(Price18=0.01)])[0]
+        with mock.patch("elpriser.grid_client.fetch_tariffs", return_value=[cheaper]):
+            service.update_tariffs([GLN])
+        self.assertEqual(GridTariff.objects.count(), 1)
+        self.assertEqual(GridTariff.objects.get().hour_prices[17], 0.01)
+
+    def test_same_code_different_periods_are_separate_rows(self):
+        rows = grid_client.parse_tariffs([pricelist_record(ValidFrom="2026-01-01T00:00:00", ValidTo="2026-04-01T00:00:00"),
+                                          pricelist_record(ValidFrom="2026-04-01T00:00:00")])
+        with mock.patch("elpriser.grid_client.fetch_tariffs", return_value=rows):
+            self.assertEqual(service.update_tariffs([GLN]), (2, 0))
+
+    def test_nothing_to_do_without_glns(self):
+        with mock.patch("elpriser.grid_client.fetch_tariffs") as fetch:
+            self.assertEqual(service.update_tariffs([]), (0, 0))
+            self.assertEqual(service.update_tariffs([None, ""]), (0, 0))
+        fetch.assert_not_called()
+
+
+class PricingTests(TestCase):
+    @classmethod
+    def setUpTestData(cls):
+        cls.user = User.objects.create_user("anna", password="pw")
+        cls.company = GridCompany.objects.create(gln=GLN, name="Testnet A/S")
+
+    def config(self, **fields):
+        defaults = dict(user=self.user, source="datahub", company=self.company, tariff_code="CTC")
+        return GridSettings.objects.create(**{**defaults, **fields})
+
+    def test_configured_rules(self):
+        self.assertFalse(GridSettings(user=self.user).configured)
+        self.assertFalse(GridSettings(user=self.user, source="datahub", company=self.company).configured)  # kode mangler
+        self.assertTrue(GridSettings(user=self.user, source="datahub", company=self.company, tariff_code="CTC").configured)
+        self.assertFalse(GridSettings(user=self.user, source="manual", manual_hours=[1] * 23).configured)
+        self.assertTrue(GridSettings(user=self.user, source="manual", manual_hours=[1] * 24).configured)
+
+    def test_fixed_ore_sums_the_three_extras(self):
+        config = GridSettings(elafgift_ore=Decimal("0.8"), energinet_ore=Decimal("11.5"), supplier_ore=Decimal("4"))
+        self.assertAlmostEqual(config.fixed_ore, 16.3)
+
+    def test_tariff_on_respects_period_boundaries_and_newest_wins(self):
+        make_tariff(valid_from=date(2026, 1, 1), valid_to=date(2026, 4, 1), prices=[0.1] * 24)  # vinter
+        make_tariff(valid_from=date(2026, 4, 1), valid_to=None, prices=[0.2] * 24)  # sommer
+        self.assertEqual(grid.tariff_on(GLN, "CTC", date(2026, 3, 31)).hour_prices[0], 0.1)
+        self.assertEqual(grid.tariff_on(GLN, "CTC", date(2026, 4, 1)).hour_prices[0], 0.2)  # slutdato er eksklusiv
+        self.assertEqual(grid.tariff_on(GLN, "CTC", date(2026, 1, 1)).hour_prices[0], 0.1)  # startdato er inklusiv
+        self.assertIsNone(grid.tariff_on(GLN, "CTC", date(2025, 12, 31)))
+        self.assertIsNone(grid.tariff_on(GLN, "ANDEN", date(2026, 5, 1)))
+        self.assertIsNone(grid.tariff_on("5790000000999", "CTC", date(2026, 5, 1)))
+
+    def test_datahub_prices_are_converted_from_kroner_to_ore(self):
+        make_tariff()
+        pricing = grid.Pricing(self.config())
+        self.assertEqual(pricing.hour_tariffs(DAY), TARIFF_ORE)
+        self.assertTrue(pricing.has_data(DAY))
+        self.assertFalse(pricing.has_data(date(2025, 1, 1)))
+
+    def test_manual_hours_are_used_as_is(self):
+        pricing = grid.Pricing(self.config(source="manual", manual_hours=list(range(24))))
+        self.assertEqual(pricing.hour_tariffs(DAY), [float(h) for h in range(24)])
+
+    def test_malformed_tariff_is_treated_as_missing(self):
+        make_tariff(prices=[0.1] * 5)
+        self.assertFalse(grid.Pricing(self.config()).has_data(DAY))
+
+    def test_grid_ore_uses_the_danish_hour_and_adds_fixed_extras(self):
+        make_tariff()
+        pricing = grid.Pricing(self.config(elafgift_ore=Decimal("1"), supplier_ore=Decimal("4")))
+        self.assertEqual(pricing.grid_ore(utc(2026, 6, 14, 22)), 10 + 5)  # 00:00 dansk tid (sommertid)
+        self.assertEqual(pricing.grid_ore(utc(2026, 6, 15, 15)), 60 + 5)  # 17:00 dansk tid = spids
+        self.assertEqual(pricing.grid_ore(utc(2026, 6, 15, 12, 45)), 20 + 5)  # 14:45 dansk tid
+        winter = utc(2026, 1, 14, 23)  # 00:00 dansk vintertid
+        self.assertEqual(pricing.grid_ore(winter), 10 + 5)
+
+    def test_apply_adds_ore_as_dkk_per_mwh(self):
+        make_tariff()
+        pricing = grid.Pricing(self.config())
+        points = [(utc(2026, 6, 14, 22), 1000.0), (utc(2026, 6, 15, 15), 1000.0)]
+        self.assertEqual([p for _, p in grid.apply(points, pricing)], [1000 + 10 * 10, 1000 + 60 * 10])
+
+    def test_settings_for(self):
+        anonymous = mock.Mock(is_authenticated=False)
+        self.assertIsNone(grid.settings_for(anonymous))
+        self.assertIsNone(grid.settings_for(self.user))  # ingen indstillinger
+        GridSettings.objects.create(user=self.user)
+        self.assertIsNone(grid.settings_for(self.user))  # ikke udfyldt
+        GridSettings.objects.filter(user=self.user).update(company=self.company, tariff_code="CTC")
+        self.assertIsNotNone(grid.settings_for(self.user))
+
+
+@mock.patch("elpriser.views.local_today", return_value=DAY)
+class GridApiTests(TestCase):
+    @classmethod
+    def setUpTestData(cls):
+        cls.anna = User.objects.create_user("anna", password="pw")
+        cls.bo = User.objects.create_user("bo", password="pw")
+        cls.company = GridCompany.objects.create(gln=GLN, name="Testnet A/S")
+
+    def setUp(self):
+        make_day()  # spot pr. time: 100 + h øre/kWh (h = timeindeks)
+
+    def get(self, name, **params):
+        return self.client.get(reverse(f"elpriser:{name}"), params)
+
+    def configure_manual(self, user=None, **fields):
+        return GridSettings.objects.create(user=user or self.anna, source="manual", manual_hours=TARIFF_ORE, **fields)
+
+    def configure_datahub(self, user=None, **fields):
+        make_tariff()
+        return GridSettings.objects.create(user=user or self.anna, source="datahub", company=self.company, tariff_code="CTC", **fields)
+
+    def test_without_the_parameter_nothing_changes_and_cache_is_public(self, _):
+        self.configure_manual()
+        self.client.force_login(self.anna)
+        response = self.get("api_day", dato="2026-06-15")
+        data = response.json()
+        self.assertEqual(data["grid"], {"requested": False, "enabled": False, "reason": None})
+        self.assertNotIn("spot", data["points"][0])
+        self.assertEqual(data["points"][0]["v"], 100.0)
+        self.assertIn("public", response["Cache-Control"])
+
+    def test_anonymous_gets_a_reason_and_plain_spot_prices(self, _):
+        response = self.get("api_day", dato="2026-06-15", nettarif="1")
+        data = response.json()
+        self.assertEqual((data["grid"]["requested"], data["grid"]["enabled"]), (True, False))
+        self.assertIn("Log ind", data["grid"]["reason"])
+        self.assertEqual(data["points"][0]["v"], 100.0)
+        self.assertIn("private", response["Cache-Control"])  # forespørgsler med nettarif deles aldrig i fælles cache
+        self.assertIn("Cookie", response["Vary"])
+
+    def test_logged_in_without_settings(self, _):
+        self.client.force_login(self.anna)
+        data = self.get("api_day", dato="2026-06-15", nettarif="1").json()
+        self.assertFalse(data["grid"]["enabled"])
+        self.assertIn("netselskab", data["grid"]["reason"])
+
+    def test_day_with_manual_tariff_adds_hourly_grid_part(self, _):
+        self.configure_manual(elafgift_ore=Decimal("1"), supplier_ore=Decimal("4"))
+        self.client.force_login(self.anna)
+        response = self.get("api_day", dato="2026-06-15", nettarif="1")
+        data = response.json()
+        self.assertTrue(data["grid"]["enabled"])
+        first, peak = data["points"][0], data["points"][17]
+        self.assertEqual((first["spot"], first["grid"], first["v"]), (100.0, 15.0, 115.0))  # 10 nettarif + 5 faste
+        self.assertEqual((peak["spot"], peak["grid"], peak["v"]), (117.0, 65.0, 182.0))  # spids: 60 + 5
+        self.assertIn("private", response["Cache-Control"])
+
+    def test_vat_applies_to_the_whole_sum(self, _):
+        self.configure_manual()
+        self.client.force_login(self.anna)
+        point = self.get("api_day", dato="2026-06-15", nettarif="1", moms="1").json()["points"][17]
+        self.assertEqual((point["spot"], point["grid"], point["v"]), (146.25, 75.0, 221.25))  # (117 + 60) * 1,25 = 221,25
+
+    def test_stats_and_cheapest_window_use_the_total_price(self, _):
+        self.configure_manual()
+        self.client.force_login(self.anna)
+        data = self.get("api_day", dato="2026-06-15", nettarif="1").json()
+        # Uden tarif er de billigste timer 00–03; med tarif (nat 10) er det stadig natten: gns. (110+111+112)/3 = 111
+        self.assertEqual(data["cheapest_window"], {"hours": 3, "from": "00:00", "to": "03:00", "avg": 111.0})
+        self.assertEqual((data["min"]["label"], data["min"]["v"]), ("00:00", 110.0))
+        self.assertEqual((data["max"]["label"], data["max"]["v"]), ("20:00", 180.0))  # 100+20 spot + 60 spids
+
+    def test_peak_tariff_can_move_the_most_expensive_hour(self, _):
+        SpotPrice.objects.all().delete()
+        make_day(price=lambda h: 3000 if h == 12 else 1000)  # kl. 12 er dyr på spot (300 øre) ...
+        self.configure_manual()
+        self.client.force_login(self.anna)
+        data = self.get("api_day", dato="2026-06-15", nettarif="1").json()
+        self.assertEqual(data["max"]["label"], "12:00")  # ... og tariffen er kun 20 der
+        SpotPrice.objects.all().delete()
+        make_day(price=lambda h: 1000)  # flad spot: nu bestemmer tariffen alene
+        data = self.get("api_day", dato="2026-06-15", nettarif="1").json()
+        self.assertEqual({data["max"]["label"]}, {"17:00"})  # første af spidstimerne (17–20 har samme pris)
+
+    def test_hourly_aggregation_with_quarter_data(self, _):
+        SpotPrice.objects.all().delete()
+        make_day(step=15, price=lambda h: 1000)
+        self.configure_manual()
+        self.client.force_login(self.anna)
+        data = self.get("api_day", dato="2026-06-15", nettarif="1", opl="time").json()
+        self.assertEqual(len(data["points"]), 24)
+        self.assertEqual((data["points"][0]["v"], data["points"][17]["v"]), (110.0, 160.0))
+        self.assertEqual((data["points"][17]["spot"], data["points"][17]["grid"]), (100.0, 60.0))
+
+    def test_datahub_tariff_converted_from_kroner(self, _):
+        self.configure_datahub()
+        self.client.force_login(self.anna)
+        data = self.get("api_day", dato="2026-06-15", nettarif="1").json()
+        self.assertTrue(data["grid"]["enabled"])
+        self.assertEqual(data["points"][17]["grid"], 60.0)  # 0,60 kr/kWh
+
+    def test_missing_tariff_for_the_day_falls_back_to_spot_with_reason(self, _):
+        self.configure_datahub()
+        GridTariff.objects.update(valid_from=date(2026, 7, 1))  # først gyldig efter dagen
+        self.client.force_login(self.anna)
+        data = self.get("api_day", dato="2026-06-15", nettarif="1").json()
+        self.assertFalse(data["grid"]["enabled"])
+        self.assertIn("ingen nettarif", data["grid"]["reason"])
+        self.assertEqual(data["points"][0]["v"], 100.0)
+        self.assertNotIn("spot", data["points"][0])
+
+    def test_other_users_never_see_my_settings(self, _):
+        self.configure_manual(elafgift_ore=Decimal("50"))
+        self.client.force_login(self.bo)
+        data = self.get("api_day", dato="2026-06-15", nettarif="1").json()
+        self.assertFalse(data["grid"]["enabled"])
+        self.assertEqual(data["points"][0]["v"], 100.0)
+
+    def test_daily_and_profile_endpoints_with_grid(self, _):
+        make_day(day=DAY - timedelta(days=1))
+        self.configure_manual()
+        self.client.force_login(self.anna)
+        days = self.get("api_days", dage="7", nettarif="1").json()
+        self.assertTrue(days["grid"]["enabled"])
+        spot_avg = sum(100 + h for h in range(24)) / 24
+        tariff_avg = sum(TARIFF_ORE) / 24
+        self.assertEqual([d["avg"] for d in days["days"]], [round(spot_avg + tariff_avg, 2)] * 2)
+        profile = self.get("api_profile", dage="7", nettarif="1").json()
+        self.assertEqual((profile["hours"][0]["v"], profile["hours"][17]["v"]), (110.0, 177.0))  # (100+10, 117+60)
+        plain = self.get("api_days", dage="7").json()
+        self.assertEqual(plain["days"][0]["avg"], round(spot_avg, 2))
+
+    def test_daily_endpoint_skips_days_without_a_tariff(self, _):
+        make_day(day=DAY - timedelta(days=1))
+        self.configure_datahub()
+        GridTariff.objects.update(valid_from=DAY)  # tariffen gælder først fra i dag
+        self.client.force_login(self.anna)
+        days = self.get("api_days", dage="7", nettarif="1").json()["days"]
+        self.assertEqual([d["date"] for d in days], ["2026-06-15"])  # i går udelades hellere end at vildlede
+
+
+@mock.patch("elpriser.views.local_today", return_value=DAY)
+class GridPageTests(TestCase):
+    @classmethod
+    def setUpTestData(cls):
+        cls.anna = User.objects.create_user("anna", password="pw")
+        cls.bo = User.objects.create_user("bo", password="pw")
+        cls.boss = User.objects.create_superuser("boss", password="pw")
+        cls.net = GridCompany.objects.create(gln=GLN, name="Testnet A/S")
+        cls.other = GridCompany.objects.create(gln="5790000000002", name="Andet Net")
+
+    def url(self):
+        return reverse("elpriser:grid")
+
+    def manual_post(self, **overrides):
+        data = {"source": "manual", "action": "save", **{f"hour_{h}": str(TARIFF_ORE[h]) for h in range(24)}}
+        return {**data, **overrides}
+
+    def test_login_required(self, _):
+        for method, name in (("get", "grid"), ("post", "grid"), ("post", "grid_refresh_companies")):
+            response = getattr(self.client, method)(reverse(f"elpriser:{name}"))
+            self.assertEqual(response.status_code, 302)
+            self.assertIn(reverse("accounts:login"), response["Location"])
+
+    def test_page_renders(self, _):
+        self.client.force_login(self.anna)
+        response = self.client.get(self.url())
+        self.assertContains(response, "Nettarif og tillæg")
+        self.assertContains(response, "Testnet A/S")
+        self.assertContains(response, 'name="hour_23"')
+
+    def test_save_manual_tariff_with_extras(self, _):
+        self.client.force_login(self.anna)
+        response = self.client.post(self.url(), self.manual_post(elafgift_ore="0.8", energinet_ore="11.5", supplier_ore="4"))
+        self.assertRedirects(response, self.url())
+        config = GridSettings.objects.get(user=self.anna)
+        self.assertEqual((config.source, config.manual_hours), ("manual", TARIFF_ORE))
+        self.assertAlmostEqual(config.fixed_ore, 16.3)
+        self.assertTrue(config.configured)
+
+    def test_manual_requires_all_24_hours_and_sane_numbers(self, _):
+        self.client.force_login(self.anna)
+        for bad in ({"hour_5": ""}, {"hour_5": "-1"}, {"hour_5": "5000"}, {"hour_5": "abc"}, {"elafgift_ore": "-3"}, {"supplier_ore": "9999"}):
+            self.assertEqual(self.client.post(self.url(), self.manual_post(**bad)).status_code, 400, bad)
+        self.assertFalse(GridSettings.objects.get(user=self.anna).configured)  # ingen af de ugyldige gemte noget
+
+    def test_save_datahub_tariff(self, _):
+        make_tariff()
+        self.client.force_login(self.anna)
+        response = self.client.post(self.url(), {"source": "datahub", "action": "save", "company": self.net.pk, "tariff_code": "CTC", "supplier_ore": "5"})
+        self.assertRedirects(response, self.url())
+        config = GridSettings.objects.get(user=self.anna)
+        self.assertEqual((config.company, config.tariff_code), (self.net, "CTC"))
+
+    def test_datahub_validation(self, _):
+        make_tariff()
+        self.client.force_login(self.anna)
+        self.assertEqual(self.client.post(self.url(), {"source": "datahub", "action": "save"}).status_code, 400)  # intet netselskab
+        self.assertContains(self.client.post(self.url(), {"source": "datahub", "action": "save", "company": self.net.pk}), "Vælg din tarif", status_code=400)
+        bad_code = self.client.post(self.url(), {"source": "datahub", "action": "save", "company": self.net.pk, "tariff_code": "FORKERT"})
+        self.assertEqual(bad_code.status_code, 400)
+        # en tarif fra et ANDET netselskab kan ikke vælges
+        make_tariff(gln=self.other.gln, code="ANDEN")
+        crossed = self.client.post(self.url(), {"source": "datahub", "action": "save", "company": self.net.pk, "tariff_code": "ANDEN"})
+        self.assertEqual(crossed.status_code, 400)
+        self.assertFalse(GridSettings.objects.get(user=self.anna).configured)
+
+    def test_reload_shows_tariffs_for_the_chosen_company_without_saving(self, _):
+        make_tariff(name="Nettarif C")
+        make_tariff(gln=self.other.gln, code="B-LAV", name="Nettarif B lav")
+        self.client.force_login(self.anna)
+        response = self.client.post(self.url(), {"source": "datahub", "action": "reload", "company": self.other.pk})
+        self.assertContains(response, "Nettarif B lav")
+        self.assertNotContains(response, "Nettarif C (CTC)")
+        self.assertFalse(GridSettings.objects.get(user=self.anna).configured)
+
+    def test_reload_keeps_the_source_the_user_just_chose(self, _):
+        make_tariff()
+        GridSettings.objects.create(user=self.anna, source="manual", manual_hours=TARIFF_ORE)  # gemt: egne timepriser
+        self.client.force_login(self.anna)
+        response = self.client.post(self.url(), {"source": "datahub", "action": "reload", "company": self.net.pk})
+        self.assertEqual(response.context["form"].initial["source"], "datahub")  # ikke tilbage til «manual»
+        self.assertRegex(response.content.decode(), r'<input[^>]*value="datahub"[^>]*\bchecked\b')
+        self.assertNotRegex(response.content.decode(), r'<input[^>]*value="manual"[^>]*\bchecked\b')
+        self.assertEqual(GridSettings.objects.get(user=self.anna).source, "manual")  # og stadig ikke gemt
+
+    def test_saved_values_are_the_defaults_on_a_plain_get(self, _):
+        make_tariff()
+        GridSettings.objects.create(user=self.anna, source="datahub", company=self.net, tariff_code="CTC", supplier_ore=Decimal("4"))
+        self.client.force_login(self.anna)
+        initial = self.client.get(self.url()).context["form"].initial
+        self.assertEqual((initial["source"], initial["company"], initial["tariff_code"], initial["supplier_ore"]), ("datahub", self.net, "CTC", Decimal("4.000")))
+
+    def test_reload_without_company_shows_no_tariffs(self, _):
+        make_tariff()
+        self.client.force_login(self.anna)
+        response = self.client.post(self.url(), {"source": "datahub", "action": "reload", "company": ""})
+        self.assertNotContains(response, "Nettarif C (CTC)")
+
+    def test_tariffs_are_fetched_on_demand_when_missing(self, _):
+        self.client.force_login(self.anna)
+
+        def fake_update(glns):
+            make_tariff(gln=glns[0])
+            return 1, 0
+
+        with mock.patch("elpriser.views.update_tariffs", side_effect=fake_update) as update:
+            response = self.client.post(self.url(), {"source": "datahub", "action": "reload", "company": self.net.pk})
+        update.assert_called_once_with([GLN])
+        self.assertContains(response, "Nettarif C (CTC)")
+        with mock.patch("elpriser.views.update_tariffs") as update:  # nu findes de: ingen ny hentning
+            self.client.post(self.url(), {"source": "datahub", "action": "reload", "company": self.net.pk})
+        update.assert_not_called()
+
+    def test_on_demand_fetch_failures_are_shown_not_crashing(self, _):
+        self.client.force_login(self.anna)
+        for error, text in ((EnergiDataError("Energinet er nede"), "Energinet er nede"), (RuntimeError("bug"), "Uventet fejl")):
+            with mock.patch("elpriser.views.update_tariffs", side_effect=error):
+                response = self.client.post(self.url(), {"source": "datahub", "action": "reload", "company": self.net.pk})
+            self.assertContains(response, text)
+        with mock.patch("elpriser.views.update_tariffs", return_value=(0, 0)):
+            self.assertContains(self.client.post(self.url(), {"source": "datahub", "action": "reload", "company": self.net.pk}), "ingen tariffer")
+
+    def test_preview_shows_todays_tariff_when_configured(self, _):
+        make_tariff()
+        self.client.force_login(self.anna)
+        self.client.post(self.url(), {"source": "datahub", "action": "save", "company": self.net.pk, "tariff_code": "CTC", "elafgift_ore": "2"})
+        preview = self.client.get(self.url()).context["preview"]
+        self.assertEqual(preview["tariff"], TARIFF_ORE)
+        self.assertEqual(preview["fixed"], 2.0)
+        self.assertEqual(preview["total"][17], 62.0)
+
+    def test_settings_are_private_per_user(self, _):
+        self.client.force_login(self.anna)
+        self.client.post(self.url(), self.manual_post(supplier_ore="77"))
+        self.client.force_login(self.bo)
+        response = self.client.get(self.url())
+        self.assertNotContains(response, "77")
+        self.assertFalse(GridSettings.objects.get(user=self.bo).configured)
+
+    def test_refresh_companies_permissions_and_messages(self, _):
+        url = reverse("elpriser:grid_refresh_companies")
+        with mock.patch("elpriser.views.update_companies", return_value=12) as update:
+            self.client.force_login(self.anna)
+            self.client.post(url)  # almindelig bruger afvises
+            update.assert_not_called()
+            self.client.force_login(self.boss)
+            self.assertEqual(self.client.get(url).status_code, 405)
+            self.assertContains(self.client.post(url, follow=True), "12 selskaber")
+        with mock.patch("elpriser.views.update_companies", side_effect=EnergiDataError("nede")):
+            self.assertContains(self.client.post(url, follow=True), "Hentningen fejlede: nede")
+        with mock.patch("elpriser.views.update_companies", side_effect=RuntimeError("bug")):
+            self.assertContains(self.client.post(url, follow=True), "Uventet fejl")
+
+    def test_refresh_button_only_for_superadmin(self, _):
+        self.client.force_login(self.anna)
+        self.assertNotContains(self.client.get(self.url()), "Hent netselskaber</button>")
+        self.client.force_login(self.boss)
+        self.assertContains(self.client.get(self.url()), "Hent netselskaber")
+
+
+@mock.patch("elpriser.views.local_today", return_value=DAY)
+class GridIndexTests(TestCase):
+    @classmethod
+    def setUpTestData(cls):
+        cls.anna = User.objects.create_user("anna", password="pw")
+
+    def test_toggle_only_when_configured(self, _):
+        anonymous = self.client.get(reverse("elpriser:index"))
+        self.assertContains(anonymous, 'data-grid-available="0"')
+        self.assertNotContains(anonymous, "Medregn din nettarif")
+        self.client.force_login(self.anna)
+        page = self.client.get(reverse("elpriser:index"))
+        self.assertContains(page, "Medregn din nettarif")
+        self.assertNotContains(page, 'id="opt-grid"')
+        GridSettings.objects.create(user=self.anna, source="manual", manual_hours=TARIFF_ORE)
+        page = self.client.get(reverse("elpriser:index"))
+        self.assertContains(page, 'data-grid-available="1"')
+        self.assertContains(page, 'id="opt-grid"')
+
+
+class GridAlertTests(TestCase):
+    """Beskeder med nettarif og tip til vaskemaskinen."""
+
+    @classmethod
+    def setUpTestData(cls):
+        cls.anna = User.objects.create_user("anna", password="pw", email="anna@example.dk")
+        cls.company = GridCompany.objects.create(gln=GLN, name="Testnet A/S")
+
+    def setUp(self):
+        mail.outbox.clear()
+        self.tomorrow = DAY + timedelta(days=1)
+        # spot: 30 øre om natten (0–6), 20 øre midt på dagen (12–15), 90 øre resten
+        make_day(day=self.tomorrow, price=lambda h: 300 if h < 6 else 200 if 12 <= h < 15 else 900)
+
+    def alert(self, **fields):
+        defaults = dict(user=self.anna, enabled=True, threshold_ore=40, expensive_ore=100, incl_vat=False,
+                        notify_cheap=True, warn_expensive=False, notify_email=True, include_grid=False)
+        return CheapPowerAlert.objects.create(**{**defaults, **fields})
+
+    def send(self):
+        return alerts.send_due_alerts(now=NOW)
+
+    def manual_tariff(self, hours):
+        GridSettings.objects.create(user=self.anna, source="manual", manual_hours=hours)
+
+    def test_tip_line_in_email_and_push_without_grid(self):
+        self.alert(notify_phone=True, ntfy_topic="elpris-abcdefghij")
+        with mock.patch("elpriser.alerts.push.send_ntfy") as send_ntfy:
+            self.send()
+        self.assertIn("Tip til vaskemaskine/opvasker: kl. 12:00–15:00 (3 timer, gennemsnit 20,0 øre/kWh)", mail.outbox[0].body)
+        self.assertIn("tip til vask kl. 12:00–15:00 (20,0 øre)", send_ntfy.call_args.args[2])
+        self.assertIn("Priserne er spotpriser uden nettarif", mail.outbox[0].body)
+
+    def test_threshold_is_compared_with_price_including_grid(self):
+        self.alert(include_grid=True, threshold_ore=45)
+        self.manual_tariff([20.0] * 24)  # +20 øre hele døgnet: nat 50, midt på dagen 40, resten 110
+        self.send()
+        body = mail.outbox[0].body
+        self.assertIn("- kl. 12:00–15:00 (3 timer): gennemsnit 40,0 øre/kWh", body)  # 20 + 20
+        self.assertNotIn("kl. 00:00–06:00", body)  # 30 + 20 = 50 > 45
+        self.assertIn("inkl. din nettarif og dine øvrige tillæg", body)
+        self.assertNotIn("uden nettarif", body)
+
+    def test_grid_can_change_what_is_cheap(self):
+        self.alert(include_grid=True, threshold_ore=45)
+        # spids-tarif midt på dagen gør de ellers billige timer dyre; natten bliver billigst
+        self.manual_tariff([5.0] * 6 + [5.0] * 6 + [60.0] * 3 + [5.0] * 9)
+        self.send()
+        body = mail.outbox[0].body
+        self.assertIn("kl. 00:00–06:00", body)
+        self.assertNotIn("- kl. 12:00–15:00", body)
+        self.assertIn("Tip til vaskemaskine/opvasker: kl. 00:00–03:00", body)  # tippet følger også totalprisen
+
+    def test_without_include_grid_the_tariff_is_ignored(self):
+        self.alert(include_grid=False, threshold_ore=45)
+        self.manual_tariff([20.0] * 24)
+        self.send()
+        self.assertIn("kl. 00:00–06:00", mail.outbox[0].body)  # 30 øre spot er billig uden tarif
+
+    def test_missing_tariff_falls_back_to_spot_with_a_warning(self):
+        self.alert(include_grid=True)
+        GridSettings.objects.create(user=self.anna, source="datahub", company=self.company, tariff_code="CTC")  # ingen tarifdata
+        self.send()
+        self.assertIn("mangler for en af dagene", mail.outbox[0].body)
+        self.assertIn("kl. 00:00–06:00", mail.outbox[0].body)  # beregnet på spotprisen
+
+    def test_include_grid_without_any_settings_also_warns(self):
+        self.alert(include_grid=True)
+        self.send()
+        self.assertIn("mangler for en af dagene", mail.outbox[0].body)
+
+    def test_datahub_tariff_is_used_in_alerts(self):
+        self.alert(include_grid=True, threshold_ore=45)
+        make_tariff(prices=[0.20] * 24)
+        GridSettings.objects.create(user=self.anna, source="datahub", company=self.company, tariff_code="CTC")
+        self.send()
+        self.assertIn("- kl. 12:00–15:00 (3 timer): gennemsnit 40,0 øre/kWh", mail.outbox[0].body)
+
+    def test_todays_tip_only_considers_hours_that_are_not_over(self):
+        make_day(day=DAY, price=lambda h: 200 if h < 3 else 900 if h < 12 else 300 if 12 <= h < 15 else 900)
+        self.alert()
+        self.send()
+        body = mail.outbox[0].body
+        today_part = body.split("I morgen (")[0]
+        self.assertIn("Tip til vaskemaskine/opvasker: kl. 12:00–15:00", today_part)  # klokken er 10: natten er forbi
+        self.assertNotIn("00:00–03:00", today_part)
+
+    def test_tip_alone_never_triggers_a_message(self):
+        SpotPrice.objects.all().delete()
+        make_day(day=self.tomorrow, price=lambda h: 900)  # ingenting er billigt
+        self.alert()
+        self.assertEqual(self.send(), 0)
+        self.assertEqual(len(mail.outbox), 0)
+
+    def test_preview_in_settings_page_uses_grid_choice(self):
+        self.alert(include_grid=True, threshold_ore=45)
+        self.manual_tariff([20.0] * 24)
+        report = alerts.day_report(CheapPowerAlert.objects.get(), self.tomorrow)
+        self.assertTrue(report.with_grid)
+        self.assertEqual(hours_of(report.cheap), [("12:00", "15:00")])
+        self.assertEqual(report.window.avg, 40.0)
+
+
+class FetchTariffCommandTests(TestCase):
+    def setUp(self):
+        self.user = User.objects.create_user("anna", password="pw")
+        self.company = GridCompany.objects.create(gln=GLN, name="Testnet A/S")
+
+    def run_command(self, *args):
+        out = io.StringIO()
+        call_command("fetch_nettariffer", *args, stdout=out)
+        return out.getvalue()
+
+    def test_fetches_for_companies_chosen_by_users_only(self):
+        GridSettings.objects.create(user=self.user, source="datahub", company=self.company, tariff_code="CTC")
+        other = User.objects.create_user("bo", password="pw")
+        GridSettings.objects.create(user=other, source="manual", manual_hours=[1] * 24)  # manuel: intet at hente
+        with mock.patch("elpriser.management.commands.fetch_nettariffer.update_tariffs", return_value=(3, 1)) as update:
+            output = self.run_command()
+        self.assertEqual(update.call_args.args[0], {GLN})
+        self.assertIn("3 nye og 1 opdaterede", output)
+
+    def test_gln_option_and_companies_flag(self):
+        with mock.patch("elpriser.management.commands.fetch_nettariffer.update_companies", return_value=7) as companies, \
+             mock.patch("elpriser.management.commands.fetch_nettariffer.update_tariffs", return_value=(1, 0)) as update:
+            output = self.run_command("--companies", "--gln", "5790000000009")
+        companies.assert_called_once()
+        self.assertEqual(update.call_args.args[0], {"5790000000009"})
+        self.assertIn("Netselskaber opdateret: 7", output)
+
+    def test_nothing_chosen(self):
+        with mock.patch("elpriser.management.commands.fetch_nettariffer.update_tariffs") as update:
+            self.assertIn("Ingen valgte netselskaber", self.run_command())
+        update.assert_not_called()
+
+    def test_failures_become_commanderror(self):
+        with mock.patch("elpriser.management.commands.fetch_nettariffer.update_companies", side_effect=EnergiDataError("nede")):
+            with self.assertRaisesMessage(CommandError, "Hentningen fejlede: nede"):
+                self.run_command("--companies")
+
+    def test_warns_when_nothing_found(self):
+        with mock.patch("elpriser.management.commands.fetch_nettariffer.update_tariffs", return_value=(0, 0)):
+            self.assertIn("Ingen tariffer fundet", self.run_command("--gln", GLN))
+
+    def test_check_api_reports_companies_columns_and_unit_conversion(self):
+        companies = fake_urlopen({"total": 1, "records": [pricelist_record()]}).return_value
+        tariffs = fake_urlopen({"total": 1, "records": [pricelist_record()]}).return_value
+        with mock.patch("elpriser.client.urllib.request.urlopen", mock.Mock(side_effect=[companies, tariffs])):
+            output = self.run_command("--check-api")
+        self.assertIn("OK: 1 netselskaber", output)
+        self.assertIn("Testnet A/S", output)
+        self.assertIn("Kolonner i tarifsvaret: ChargeOwner", output)
+        self.assertIn("0.1000–0.6000 DKK/kWh = 10.0–60.0 øre/kWh", output)  # så man kan sammenligne med sit prisblad
+        self.assertIn("OK: 1 tariffer kan tolkes", output)
+        self.assertEqual(GridTariff.objects.count() + GridCompany.objects.exclude(gln=GLN).count(), 0)  # gemmer intet
+
+    def test_check_api_failures_are_explained(self):
+        empty = fake_urlopen({"total": 0, "records": []})
+        with mock.patch("elpriser.client.urllib.request.urlopen", empty), self.assertRaisesMessage(CommandError, "ingen netselskaber"):
+            self.run_command("--check-api")
+        with mock.patch("elpriser.client.urllib.request.urlopen", fake_urlopen({"total": 1, "records": [{"x": 1}]})), \
+             self.assertRaisesMessage(CommandError, "Kunne ikke hente netselskaber"):
+            self.run_command("--check-api")
+        with mock.patch("elpriser.client.urllib.request.urlopen", mock.Mock(side_effect=http_error(403, b"forbudt"))), \
+             self.assertRaisesMessage(CommandError, "HTTP 403"):
+            self.run_command("--check-api")

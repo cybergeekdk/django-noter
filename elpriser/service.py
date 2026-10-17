@@ -90,3 +90,49 @@ def update_prices(areas=VALID_AREAS, days_back=1, days_ahead=1, today=None):
     run.message = "Ingen priser fundet i tidsrummet." if result.rows == 0 else ""
     run.save()
     return result
+
+
+# --- Netselskaber og nettariffer ---------------------------------------------------------------
+
+
+def update_companies():
+    """Henter listen over netselskaber. Returnerer antal selskaber."""
+    from . import grid_client
+    from .models import GridCompany
+
+    companies = grid_client.fetch_companies()
+    if not companies:
+        raise EnergiDataError("Energinet returnerede ingen netselskaber.")
+    with transaction.atomic():
+        for gln, name in companies.items():
+            GridCompany.objects.update_or_create(gln=gln, defaults={"name": name})
+    return len(companies)
+
+
+def update_tariffs(glns):
+    """Henter nettariffer for netselskaberne og gemmer dem (upsert). Returnerer (nye, opdaterede)."""
+    from . import grid_client
+    from .models import GridTariff
+
+    glns = sorted({str(g) for g in glns if g})
+    if not glns:
+        return 0, 0
+    rows = grid_client.fetch_tariffs(glns)
+    existing = set(GridTariff.objects.filter(gln__in=glns).values_list("gln", "code", "valid_from"))
+    now = timezone.now()
+    objects = [
+        GridTariff(
+            gln=r.gln, code=r.code, name=r.name, valid_from=r.valid_from, valid_to=r.valid_to,
+            hour_prices=list(r.hour_prices), fetched=now,
+        )
+        for r in rows
+    ]
+    with transaction.atomic():
+        GridTariff.objects.bulk_create(
+            objects,
+            update_conflicts=True,
+            unique_fields=["gln", "code", "valid_from"],
+            update_fields=["name", "valid_to", "hour_prices", "fetched"],
+        )
+    new = sum(1 for r in rows if (r.gln, r.code, r.valid_from) not in existing)
+    return new, len(rows) - new

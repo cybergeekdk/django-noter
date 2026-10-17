@@ -64,7 +64,15 @@
         {{ form.incl_vat }}
         <label class="form-check-label" for="{{ form.incl_vat.id_for_label }}">{{ form.incl_vat.label }}</label>
       </div>
-      <div class="form-text mb-3">Der sammenlignes med spotprisen (uden nettarif og afgifter). Med moms lægges 25 % oven på.</div>
+      <div class="form-check mt-2 mb-1">
+        {{ form.include_grid }}
+        <label class="form-check-label" for="{{ form.include_grid.id_for_label }}">{{ form.include_grid.label }}</label>
+      </div>
+      <div class="form-text mb-3">
+        {% if grid_configured %}Grænserne sammenlignes med prisen inkl. din nettarif og dine tillæg.
+        {% else %}Uden nettarif sammenlignes grænserne med spotprisen (uden nettarif og afgifter). <a href="{% url 'elpriser:grid' %}">Tilføj din nettarif</a>.{% endif %}
+        Med moms lægges 25 % oven på.
+      </div>
 
       <fieldset class="border rounded p-3 mb-4">
         <legend class="float-none w-auto px-2 fs-6 mb-0">Hvordan vil du have besked?</legend>
