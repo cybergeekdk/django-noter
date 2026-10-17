@@ -12,56 +12,124 @@
 
 <div class="row g-4">
   <div class="col-lg-6">
-    <h1 class="mb-3"><i class="bi bi-bell me-2"></i>Besked om billig strøm</h1>
+    <h1 class="mb-3"><i class="bi bi-bell me-2"></i>Besked om billig og dyr strøm</h1>
     <p class="text-body-secondary">
-      Få en e-mail, når næste døgns priser er ude, og der er en billig periode. Du får højst én besked pr. dag, og kun hvis der er noget billigt.
+      Få besked, når næste døgns priser er ude, og der er billige (eller dyre) perioder. Du får højst én besked pr. dag, og kun hvis der er noget at melde.
     </p>
     <form method="post" novalidate>
       {% csrf_token %}
       {% if form.non_field_errors %}<div class="alert alert-danger">{{ form.non_field_errors|join:" " }}</div>{% endif %}
       <div class="form-check form-switch mb-3">
         {{ form.enabled }}
-        <label class="form-check-label" for="{{ form.enabled.id_for_label }}">{{ form.enabled.label }}</label>
+        <label class="form-check-label fw-semibold" for="{{ form.enabled.id_for_label }}">{{ form.enabled.label }}</label>
       </div>
+
       <div class="mb-3">
         <label for="{{ form.area.id_for_label }}" class="form-label">{{ form.area.label }}</label>
         {{ form.area }}
         <div class="form-text">DK1 er vest for Storebælt (Jylland og Fyn), DK2 er øst for (Sjælland, Lolland-Falster og Bornholm).</div>
       </div>
-      <div class="row g-3 mb-3">
-        <div class="col-sm-6">
-          <label for="{{ form.threshold_ore.id_for_label }}" class="form-label">{{ form.threshold_ore.label }}</label>
-          <div class="input-group">{{ form.threshold_ore }}<span class="input-group-text">øre/kWh</span></div>
-          {% for error in form.threshold_ore.errors %}<div class="text-danger small mt-1">{{ error }}</div>{% endfor %}
+
+      <fieldset class="border rounded p-3 mb-3">
+        <legend class="float-none w-auto px-2 fs-6 mb-0">Billig strøm</legend>
+        <div class="form-check mb-2">
+          {{ form.notify_cheap }}
+          <label class="form-check-label" for="{{ form.notify_cheap.id_for_label }}">{{ form.notify_cheap.label }}</label>
         </div>
-        <div class="col-sm-6">
-          <label for="{{ form.min_hours.id_for_label }}" class="form-label">{{ form.min_hours.label }}</label>
-          {{ form.min_hours }}
+        <div class="row g-3">
+          <div class="col-sm-6">
+            <label for="{{ form.threshold_ore.id_for_label }}" class="form-label">{{ form.threshold_ore.label }}</label>
+            <div class="input-group">{{ form.threshold_ore }}<span class="input-group-text">øre/kWh</span></div>
+            {% for error in form.threshold_ore.errors %}<div class="text-danger small mt-1">{{ error }}</div>{% endfor %}
+          </div>
+          <div class="col-sm-6">
+            <label for="{{ form.min_hours.id_for_label }}" class="form-label">{{ form.min_hours.label }} (gælder både billig og dyr)</label>
+            {{ form.min_hours }}
+          </div>
         </div>
-      </div>
+      </fieldset>
+
+      <fieldset class="border rounded p-3 mb-3">
+        <legend class="float-none w-auto px-2 fs-6 mb-0">Dyr strøm</legend>
+        <div class="form-check mb-2">
+          {{ form.warn_expensive }}
+          <label class="form-check-label" for="{{ form.warn_expensive.id_for_label }}">{{ form.warn_expensive.label }}</label>
+        </div>
+        <label for="{{ form.expensive_ore.id_for_label }}" class="form-label">{{ form.expensive_ore.label }}</label>
+        <div class="input-group" style="max-width: 16rem">{{ form.expensive_ore }}<span class="input-group-text">øre/kWh</span></div>
+        {% for error in form.expensive_ore.errors %}<div class="text-danger small mt-1">{{ error }}</div>{% endfor %}
+      </fieldset>
+
       <div class="form-check mb-1">
         {{ form.incl_vat }}
         <label class="form-check-label" for="{{ form.incl_vat.id_for_label }}">{{ form.incl_vat.label }}</label>
       </div>
       <div class="form-text mb-3">Der sammenlignes med spotprisen (uden nettarif og afgifter). Med moms lægges 25 % oven på.</div>
-      <div class="mb-4">
-        <label for="{{ form.email.id_for_label }}" class="form-label">{{ form.email.label }}</label>
-        {{ form.email }}
-        {% for error in form.email.errors %}<div class="text-danger small mt-1">{{ error }}</div>{% endfor %}
-        <div class="form-text">{{ form.email.help_text }}</div>
-      </div>
+
+      <fieldset class="border rounded p-3 mb-4">
+        <legend class="float-none w-auto px-2 fs-6 mb-0">Hvordan vil du have besked?</legend>
+        <div class="form-check mb-2">
+          {{ form.notify_email }}
+          <label class="form-check-label" for="{{ form.notify_email.id_for_label }}">{{ form.notify_email.label }}</label>
+        </div>
+        <div class="mb-3 ms-4">
+          <label for="{{ form.email.id_for_label }}" class="form-label small mb-1">{{ form.email.label }}</label>
+          {{ form.email }}
+          {% for error in form.email.errors %}<div class="text-danger small mt-1">{{ error }}</div>{% endfor %}
+        </div>
+        <div class="form-check">
+          {{ form.notify_phone }}
+          <label class="form-check-label" for="{{ form.notify_phone.id_for_label }}">{{ form.notify_phone.label }}</label>
+        </div>
+        {% for error in form.notify_phone.errors %}<div class="text-danger small mt-1">{{ error }}</div>{% endfor %}
+      </fieldset>
+
       <div class="d-flex gap-2">
         <button type="submit" class="btn btn-primary">Gem</button>
         <a href="{% url 'elpriser:index' %}" class="btn btn-outline-secondary">Tilbage</a>
       </div>
     </form>
-    {% if user.email %}
-      <hr class="my-4">
-      <form method="post" action="{% url 'elpriser:alerts_test' %}" class="d-flex align-items-center gap-3">
-        {% csrf_token %}
-        <button type="submit" class="btn btn-outline-secondary btn-sm"><i class="bi bi-send me-1"></i>Send testmail</button>
-        <span class="small text-body-secondary">til {{ user.email }}</span>
-      </form>
+
+    <hr class="my-4">
+    <div class="d-flex flex-wrap gap-3 align-items-center mb-3">
+      {% if user.email %}
+        <form method="post" action="{% url 'elpriser:alerts_test' %}" class="d-flex align-items-center gap-2">
+          {% csrf_token %}
+          <button type="submit" class="btn btn-outline-secondary btn-sm"><i class="bi bi-envelope me-1"></i>Send testmail</button>
+          <span class="small text-body-secondary">til {{ user.email }}</span>
+        </form>
+      {% endif %}
+      {% if alert.ntfy_topic %}
+        <form method="post" action="{% url 'elpriser:alerts_test_phone' %}">
+          {% csrf_token %}
+          <button type="submit" class="btn btn-outline-secondary btn-sm"><i class="bi bi-phone me-1"></i>Send test til telefonen</button>
+        </form>
+      {% endif %}
+    </div>
+
+    {% if alert.ntfy_topic %}
+      <div class="card" id="phone-setup">
+        <div class="card-header"><i class="bi bi-phone me-1"></i>Sådan får du beskeder på telefonen</div>
+        <div class="card-body small">
+          <ol class="mb-2 ps-3">
+            <li>Installér appen <strong>ntfy</strong> (gratis, Android og iPhone).</li>
+            <li>Tryk <strong>+</strong> og abonnér på dette emne{% if ntfy_server != "https://ntfy.sh" %} på serveren <code>{{ ntfy_server }}</code>{% endif %}:
+              <div class="my-2"><code class="user-select-all fs-6" id="ntfy-topic">{{ alert.ntfy_topic }}</code></div>
+            </li>
+            <li>Tryk «Send test til telefonen» ovenfor.</li>
+          </ol>
+          <p class="text-body-secondary mb-2">
+            Emnet er hemmeligt: alle, der kender det, kan se dine beskeder. Del det ikke.
+            Du kan også åbne <a href="{{ ntfy_url }}" rel="noopener" target="_blank">{{ ntfy_url }}</a> i en browser.
+          </p>
+          <form method="post" action="{% url 'elpriser:alerts_new_topic' %}">
+            {% csrf_token %}
+            <button type="submit" class="btn btn-sm btn-outline-danger">Få et nyt emne</button>
+          </form>
+        </div>
+      </div>
+    {% elif form.notify_phone.value %}
+      <div class="alert alert-info small mb-0">Gem indstillingerne, så får du et hemmeligt emne at abonnere på i ntfy-appen.</div>
     {% endif %}
   </div>
 
@@ -70,21 +138,24 @@
       <div class="card-header">Hvornår ville du have fået besked?</div>
       <div class="card-body">
         <p class="small text-body-secondary">
-          Efter dine gemte indstillinger ({{ alert.area }}, under {{ alert.threshold_ore|floatformat:"-1" }} øre/kWh{% if alert.incl_vat %} inkl. moms{% endif %}, {{ alert.get_min_hours_display }}).
-          {% if preview.share is not None %}De seneste 30 dage var prisen under grænsen i <strong>{{ preview.share }} %</strong> af tiden.{% endif %}
+          Efter dine gemte indstillinger ({{ alert.area }}{% if alert.notify_cheap %}, billig: under {{ alert.threshold_ore|floatformat:"-1" }} øre/kWh{% endif %}{% if alert.warn_expensive %}, dyr: over {{ alert.expensive_ore|floatformat:"-1" }} øre/kWh{% endif %}{% if alert.incl_vat %}, inkl. moms{% endif %}, {{ alert.get_min_hours_display }}).
+          {% if preview.share is not None %}
+            De seneste 30 dage var prisen under billig-grænsen i <strong>{{ preview.share }} %</strong> af tiden{% if alert.warn_expensive %} og over dyr-grænsen i <strong>{{ preview.expensive_share }} %</strong>{% endif %}.
+          {% endif %}
         </p>
         {% for day in preview.days %}
           <div class="d-flex gap-3 py-2 border-top">
             <div class="fw-semibold" style="min-width: 5.5rem">{{ day.label }}</div>
             <div class="flex-grow-1">
-              {% for p in day.periods %}
-                <div>
-                  kl. {{ p.start|time:"H:i" }}–{{ p.end|time:"H:i" }}
-                  <span class="text-body-secondary small">· gns. {{ p.avg|floatformat:1 }} øre/kWh</span>
-                </div>
-              {% empty %}
-                <span class="text-body-secondary">Ingen billige perioder</span>
+              {% for p in day.cheap %}
+                <div><span class="badge text-bg-success me-1">billig</span>kl. {{ p.start|time:"H:i" }}–{{ p.end|time:"H:i" }}
+                  <span class="text-body-secondary small">· gns. {{ p.avg|floatformat:1 }} øre/kWh</span></div>
               {% endfor %}
+              {% for p in day.expensive %}
+                <div><span class="badge text-bg-danger me-1">dyr</span>kl. {{ p.start|time:"H:i" }}–{{ p.end|time:"H:i" }}
+                  <span class="text-body-secondary small">· gns. {{ p.avg|floatformat:1 }} øre/kWh</span></div>
+              {% endfor %}
+              {% if not day.cheap and not day.expensive %}<span class="text-body-secondary">Ingen besked</span>{% endif %}
             </div>
           </div>
         {% empty %}

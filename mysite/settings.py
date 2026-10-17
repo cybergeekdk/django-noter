@@ -168,3 +168,7 @@ PRIVATE_MEDIA_ROOT = BASE_DIR / "private_media"
 ENERGINET_API_URL = os.environ.get("ENERGINET_API_URL", "https://api.energidataservice.dk")
 ENERGINET_DATASET = os.environ.get("ENERGINET_DATASET", "DayAheadPrices")
 ENERGINET_TIMEOUT = int(os.environ.get("ENERGINET_TIMEOUT", "30"))
+
+# Beskeder til telefonen via ntfy (https://ntfy.sh). Serveren sættes kun her, aldrig af brugere.
+NTFY_SERVER = os.environ.get("NTFY_SERVER", "https://ntfy.sh")
+NTFY_TOKEN = os.environ.get("NTFY_TOKEN", "")  # kun hvis din ntfy-server kræver login

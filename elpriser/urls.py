@@ -12,4 +12,6 @@ urlpatterns = [
     path("opdater/", views.refresh, name="refresh"),
     path("besked/", views.alerts, name="alerts"),
     path("besked/test/", views.alerts_test, name="alerts_test"),
+    path("besked/test-telefon/", views.alerts_test_phone, name="alerts_test_phone"),
+    path("besked/nyt-emne/", views.alerts_new_topic, name="alerts_new_topic"),
 ]

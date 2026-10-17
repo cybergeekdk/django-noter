@@ -161,21 +161,35 @@ Mislykkede kald prøves op til 3 gange. Indstillinger (miljøvariabler): `ENERGI
 (standard `https://api.energidataservice.dk`), `ENERGINET_DATASET` (standard `DayAheadPrices`),
 `ENERGINET_TIMEOUT` (sekunder, standard 30).
 
-### Besked, når strømmen er billig
+### Besked om billig og dyr strøm
 
-Logget ind kan man under **Få besked om billig strøm** (`/elpriser/besked/`) få en e-mail, når
-næste døgns priser er ude, og der er en billig periode. Standardområdet er **DK1** (vest for
-Storebælt: Jylland og Fyn); DK2 er øst for. Man vælger selv:
+Logget ind kan man under **Få besked om billig strøm** (`/elpriser/besked/`) få besked, når
+næste døgns priser er ude, og der er billige (og evt. dyre) perioder. Standardområdet er **DK1**
+(vest for Storebælt: Jylland og Fyn); DK2 er øst for. Man vælger selv:
 
-- **Hvad der er billigt**: en grænse i øre/kWh (med eller uden moms; også negative priser)
-- **Hvor længe**: mindst 1–4 timer i træk, så korte udsving ikke giver støj
-- **E-mailadresse** og **område**
+- **Billig**: en grænse i øre/kWh (med eller uden moms; også negative priser)
+- **Dyr** (valgfrit): en højere grænse, som advarer om dyre perioder i samme besked
+- **Varighed**: mindst 1–4 timer i træk, så korte udsving ikke giver støj
+- **Kanal**: e-mail, telefon (ntfy) eller begge dele, samt område og e-mailadresse
 
-Der sendes højst én mail pr. kørsel, og hver dag vurderes kun én gang, da day-ahead-priser ikke
-ændrer sig, når de er offentliggjort. Er der ingen billige perioder, sendes intet. Mailen viser
-perioderne (fra–til, gennemsnit og laveste pris) og et link til dagens graf. Siden viser, hvornår
-man ville have fået besked de seneste dage, og hvor stor en del af tiden prisen var under
-grænsen, så man kan finde en passende grænse. Ændres indstillingerne, vurderes i dag og i morgen igen.
+Der sendes højst én besked pr. kørsel og højst én gang pr. dag, da day-ahead-priser ikke ændrer
+sig, når de er offentliggjort. Er der intet at melde, sendes intet. Beskeden viser perioderne
+(fra–til, gennemsnit og laveste/højeste pris) og et link til dagens graf. Siden viser, hvornår man
+ville have fået besked de seneste dage, og hvor stor en del af tiden prisen var under/over
+grænserne, så man kan finde passende grænser. Ændres indstillingerne, vurderes i dag og i morgen igen.
+Lykkes ingen kanal, prøves igen ved næste kørsel; lykkes mindst én, regnes dagen for sendt.
+
+**Telefon (ntfy).** [ntfy](https://ntfy.sh) er en gratis tjeneste til push-beskeder uden konto: man
+installerer appen (Android/iPhone) og abonnerer på et emne. Siden giver hver bruger et **tilfældigt,
+hemmeligt emne** (brugeren kan ikke selv vælge et), viser vejledningen, kan sende en test og kan
+udskifte emnet. Emnet er i praksis en adgangskode på en offentlig server, så det må ikke deles.
+Serveren kan kun sættes af administratoren (ikke af brugere), så siden ikke kan bruges til at
+sende forespørgsler til vilkårlige adresser:
+
+| Variabel | Betydning |
+|---|---|
+| `NTFY_SERVER` | Standard `https://ntfy.sh`; sæt til din egen server, hvis du har en |
+| `NTFY_TOKEN` | Kun hvis din ntfy-server kræver login (sendes som Bearer-token) |
 
 Beskederne sendes af en kommando, der kører efter hentning af priser. Brug `--notify`, så ét
 cron-job klarer begge dele:
@@ -186,8 +200,12 @@ cron-job klarer begge dele:
 ```
 
 (`python manage.py send_cheap_power_alerts [--dry-run]` kan også køres alene.) Mailopsætningen er den
-samme som til garantipåmindelserne (miljøvariablerne `EMAIL_HOST` m.fl., se afsnittet om udstyr);
-på indstillingssiden kan man sende sig selv en testmail.
+samme som til garantipåmindelserne (miljøvariablerne `EMAIL_HOST` m.fl., se afsnittet om udstyr).
+På indstillingssiden kan man sende sig selv en testmail og en test til telefonen.
+
+> **Telefonbeskeder er ikke testet mod rigtige ntfy.** Netværket var spærret under udviklingen, så
+> `elpriser/push.py` (JSON-post til serverens rod-adresse) er kun testet med en erstattet forbindelse.
+> Brug knappen «Send test til telefonen» for at se, at det virker i dit setup.
 
 > **Kør `python manage.py fetch_elpriser --check-api` første gang.** Koden blev skrevet i et miljø
 > uden adgang til Energinets API og dokumentation, så datasættets navn og kolonner (`DayAheadPrices`

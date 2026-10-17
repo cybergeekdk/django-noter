@@ -10,7 +10,7 @@ from django.views.decorators.cache import cache_control
 from django.views.decorators.http import require_GET, require_POST
 
 from . import alerts as alert_logic
-from . import analysis
+from . import analysis, push
 from .forms import AlertForm
 from .client import VALID_AREAS, EnergiDataError
 from .models import CheapPowerAlert, FetchRun, SpotPrice
@@ -186,27 +186,30 @@ def refresh(request):
     return redirect("elpriser:index")
 
 
-# --- Besked når strømmen er billig ------------------------------------------------------------
+# --- Besked når strømmen er billig (eller dyr) -------------------------------------------------
 
 
 def alert_preview(alert):
-    """Hvornår ville brugeren have fået besked de seneste dage (og i morgen)? Hjælper med at vælge en grænse."""
+    """Hvornår ville brugeren have fået besked de seneste dage (og i morgen)? Hjælper med at vælge grænser."""
     today = local_today()
     days = []
     for offset in range(-6, 2):
         day = today + timedelta(days=offset)
-        periods, ready = alert_logic.day_periods(alert, day)
-        if not ready:
+        report = alert_logic.day_report(alert, day)
+        if report is None:
             continue
         label = "I dag" if offset == 0 else "I morgen" if offset == 1 else dateformat.format(day, "D d/m")  # dansk ugedag
-        days.append({"date": day, "label": label, "periods": periods})
+        days.append({"date": day, "label": label, "cheap": report.cheap, "expensive": report.expensive})
     first, _ = analysis.day_bounds(today - timedelta(days=29))
-    prices = list(SpotPrice.objects.filter(area=alert.area, time__gte=first).values_list("price_dkk_mwh", flat=True))
-    share = None
+    prices = [
+        analysis.to_ore_kwh(p, alert.incl_vat)
+        for p in SpotPrice.objects.filter(area=alert.area, time__gte=first).values_list("price_dkk_mwh", flat=True)
+    ]
+    share = expensive_share = None
     if prices:
-        cheap = sum(1 for p in prices if analysis.to_ore_kwh(p, alert.incl_vat) <= float(alert.threshold_ore))
-        share = round(100 * cheap / len(prices))
-    return {"days": days, "share": share}
+        share = round(100 * sum(1 for p in prices if p <= float(alert.threshold_ore)) / len(prices))
+        expensive_share = round(100 * sum(1 for p in prices if p > float(alert.expensive_ore)) / len(prices))
+    return {"days": days, "share": share, "expensive_share": expensive_share}
 
 
 @login_required
@@ -221,7 +224,13 @@ def alerts(request):
         status = 400
     else:
         form, status = AlertForm(instance=alert, user=request.user), 200
-    context = {"form": form, "preview": alert_preview(alert), "alert": alert}
+    context = {
+        "form": form,
+        "preview": alert_preview(alert),
+        "alert": alert,
+        "ntfy_server": push.server(),
+        "ntfy_url": push.topic_url(alert.ntfy_topic) if alert.ntfy_topic else "",
+    }
     return render(request, "elpriser/alerts.html", context, status=status)
 
 
@@ -241,4 +250,31 @@ def alerts_test(request):
             messages.success(request, f"Testmail sendt til {request.user.email}.")
         except Exception:
             messages.error(request, "Mailen kunne ikke sendes. Tjek mailopsætningen på serveren.")
+    return redirect("elpriser:alerts")
+
+
+@login_required
+@require_POST
+def alerts_test_phone(request):
+    """Sender en testbesked til brugerens telefon (ntfy)."""
+    alert = CheapPowerAlert.objects.get_or_create(user=request.user)[0]
+    if not alert.ntfy_topic:
+        messages.error(request, "Slå «besked til telefonen» til og gem først.")
+    else:
+        try:
+            push.send_ntfy(alert.ntfy_topic, "Test fra elpriserne", "Hvis du kan se denne besked, virker telefonbeskeder.", tags=["white_check_mark"])
+            messages.success(request, "Testbesked sendt. Kommer den ikke frem, så tjek, at du abonnerer på det rigtige emne i ntfy-appen.")
+        except push.PushError as error:
+            messages.error(request, f"Testbeskeden kunne ikke sendes: {error}")
+    return redirect("elpriser:alerts")
+
+
+@login_required
+@require_POST
+def alerts_new_topic(request):
+    """Nyt hemmeligt emne (fx hvis det gamle er kommet til andres kendskab)."""
+    alert = CheapPowerAlert.objects.get_or_create(user=request.user)[0]
+    alert.ntfy_topic = push.new_topic()
+    alert.save(update_fields=["ntfy_topic"])
+    messages.success(request, "Du har fået et nyt emne. Abonnér på det i ntfy-appen og fjern det gamle.")
     return redirect("elpriser:alerts")

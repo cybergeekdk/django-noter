@@ -761,10 +761,17 @@ class AlertSendingTests(TestCase):
         self.assertEqual(self.send(), 1)
 
 
+ALERT_POST = {
+    "enabled": "on", "area": "DK1", "notify_cheap": "on", "threshold_ore": "40", "incl_vat": "on", "min_hours": "1",
+    "expensive_ore": "100", "notify_email": "on",
+}
+
+
 def alerts_form(user, instance, **overrides):
     from .forms import AlertForm
 
-    data = {"enabled": "on", "area": "DK1", "threshold_ore": "40", "incl_vat": "on", "min_hours": "1", "email": user.email, **overrides}
+    data = {**ALERT_POST, "email": user.email, **overrides}
+    data = {k: v for k, v in data.items() if v is not None}  # None = feltet udelades (som en fravalgt afkrydsning)
     return AlertForm(data, instance=instance, user=user)
 
 
@@ -786,7 +793,7 @@ class AlertFormTests(TestCase):
 
     def test_enabling_requires_email(self):
         self.assertIn("email", self.form(email="").errors)
-        self.assertTrue(self.form(email="", enabled="").is_valid())
+        self.assertTrue(self.form(email="", enabled=None).is_valid())
 
     def test_invalid_values(self):
         for overrides in ({"threshold_ore": "mange"}, {"threshold_ore": "5000"}, {"threshold_ore": "-500"}, {"area": "SE3"}, {"min_hours": "9"}, {"email": "ikke-en-mail"}):
@@ -824,20 +831,21 @@ class AlertPageTests(TestCase):
     def test_save_settings(self, _):
         self.client.force_login(self.anna)
         response = self.client.post(reverse("elpriser:alerts"), {
-            "enabled": "on", "area": "DK1", "threshold_ore": "35", "min_hours": "2", "email": "anna@example.dk"})
+            "enabled": "on", "area": "DK1", "notify_cheap": "on", "notify_email": "on", "threshold_ore": "35", "min_hours": "2",
+            "expensive_ore": "100", "email": "anna@example.dk"})
         self.assertRedirects(response, reverse("elpriser:alerts"))
         alert = CheapPowerAlert.objects.get(user=self.anna)
         self.assertEqual((alert.enabled, alert.area, alert.threshold_ore, alert.incl_vat, alert.min_hours), (True, "DK1", 35, False, 2))
 
     def test_invalid_settings_show_errors(self, _):
         self.client.force_login(self.anna)
-        response = self.client.post(reverse("elpriser:alerts"), {"enabled": "on", "area": "DK1", "threshold_ore": "40", "min_hours": "1", "email": ""})
+        response = self.client.post(reverse("elpriser:alerts"), {**ALERT_POST, "email": ""})
         self.assertContains(response, "Angiv en e-mailadresse", status_code=400)
         self.assertFalse(CheapPowerAlert.objects.get(user=self.anna).enabled)
 
     def test_settings_are_private_per_user(self, _):
         self.client.force_login(self.anna)
-        self.client.post(reverse("elpriser:alerts"), {"enabled": "on", "area": "DK2", "threshold_ore": "10", "min_hours": "1", "email": "a@b.dk"})
+        self.client.post(reverse("elpriser:alerts"), {**ALERT_POST, "area": "DK2", "threshold_ore": "10", "email": "a@b.dk"})
         other = User.objects.create_user("bo", password="pw")
         self.client.force_login(other)
         self.assertContains(self.client.get(reverse("elpriser:alerts")), '<option value="DK1" selected>')
@@ -849,8 +857,9 @@ class AlertPageTests(TestCase):
         response = self.client.get(reverse("elpriser:alerts"))
         preview = response.context["preview"]
         by_label = {d["label"]: d for d in preview["days"]}
-        self.assertEqual(hours_of(by_label["I dag"]["periods"]), [("00:00", "06:00"), ("12:00", "15:00")])
-        self.assertEqual(by_label["I dag"]["periods"][0].avg, 37.5)
+        self.assertEqual(hours_of(by_label["I dag"]["cheap"]), [("00:00", "06:00"), ("12:00", "15:00")])
+        self.assertEqual(by_label["I dag"]["cheap"][0].avg, 37.5)
+        self.assertEqual(by_label["I dag"]["expensive"], [])  # advarsel om dyrt er ikke slået til
         self.assertEqual(len([d for d in preview["days"]]), 2)  # kun dage med data
         self.assertEqual(by_label.keys() - {"I dag"}, {"søn 14/06"})  # dansk ugedag (14. juni 2026 er en søndag)
         self.assertEqual(preview["share"], round(100 * 9 / 48))  # 9 af 48 timer er billige (<40 øre inkl. moms)
@@ -917,3 +926,346 @@ class AlertCommandTests(TestCase):
             with self.assertRaises(CommandError):
                 call_command("fetch_elpriser", "--notify", stdout=io.StringIO())
         send.assert_not_called()
+
+
+# --- Dyre perioder og besked til telefonen (ntfy) ------------------------------------------------
+
+from django.test import override_settings  # noqa: E402
+
+from . import push  # noqa: E402
+
+
+def expensive_pattern(hour):
+    """DKK/MWh pr. dansk time: 0–5 → 300 (30 øre), 6–11 → 800 (80), 12–14 → 200 (20), 15–19 → 1600 (160), 20–23 → 900 (90)."""
+    return 300 if hour < 6 else 800 if hour < 12 else 200 if hour < 15 else 1600 if hour < 20 else 900
+
+
+class ExpensivePeriodsTests(SimpleTestCase):
+    def find(self, prices, threshold=100, vat=False, minutes=60):
+        points = [(utc(2026, 6, 15, 0) + timedelta(hours=i), float(p)) for i, p in enumerate(prices)]
+        return alerts.find_periods(points, 60, threshold, vat, minutes, above=True)
+
+    def test_above_is_strict(self):
+        self.assertEqual(self.find([1000]), [])  # præcis 100 øre er ikke «over»
+        self.assertEqual(len(self.find([1001])), 1)
+
+    def test_periods_stats_and_gaps(self):
+        periods = self.find([500, 1200, 1600, 500, 1500])
+        self.assertEqual([(p.start.hour, p.end.hour) for p in periods], [(1, 3), (4, 5)])
+        self.assertEqual((periods[0].avg, periods[0].low, periods[0].high), (140.0, 120.0, 160.0))
+
+    def test_vat_and_minimum_duration(self):
+        self.assertEqual(len(self.find([850], vat=False)), 0)  # 85
+        self.assertEqual(len(self.find([850], vat=True)), 1)  # 106,25 med moms
+        self.assertEqual(self.find([1200, 500, 1200], minutes=120), [])
+
+    def test_cheap_and_expensive_never_overlap(self):
+        prices = [300, 900, 1500, 200]
+        points = [(utc(2026, 6, 15, 0) + timedelta(hours=i), float(p)) for i, p in enumerate(prices)]
+        cheap = alerts.find_periods(points, 60, 40, False, 60)
+        expensive = alerts.find_periods(points, 60, 100, False, 60, above=True)
+        taken = {p.start for p in cheap}
+        self.assertFalse(taken & {p.start for p in expensive})
+
+
+class DayReportTests(TestCase):
+    def setUp(self):
+        self.user = User.objects.create_user("anna", password="pw", email="anna@example.dk")
+        make_day(price=expensive_pattern)
+
+    def report(self, **fields):
+        alert = CheapPowerAlert(user=self.user, area="DK1", threshold_ore=40, expensive_ore=100, incl_vat=False, **fields)
+        return alerts.day_report(alert, DAY)
+
+    def test_both_kinds(self):
+        report = self.report(notify_cheap=True, warn_expensive=True)
+        self.assertEqual(hours_of(report.cheap), [("00:00", "06:00"), ("12:00", "15:00")])
+        self.assertEqual(hours_of(report.expensive), [("15:00", "20:00")])
+        self.assertTrue(report.has_any)
+
+    def test_toggles_are_respected(self):
+        only_cheap = self.report(notify_cheap=True, warn_expensive=False)
+        self.assertEqual(only_cheap.expensive, [])
+        only_expensive = self.report(notify_cheap=False, warn_expensive=True)
+        self.assertEqual(only_expensive.cheap, [])
+        self.assertEqual(len(only_expensive.expensive), 1)
+
+    def test_none_when_day_missing(self):
+        alert = CheapPowerAlert(user=self.user, area="DK1")
+        self.assertIsNone(alerts.day_report(alert, DAY + timedelta(days=5)))
+
+
+class MultiChannelAlertTests(TestCase):
+    @classmethod
+    def setUpTestData(cls):
+        cls.anna = User.objects.create_user("anna", password="pw", email="anna@example.dk")
+
+    def setUp(self):
+        mail.outbox.clear()
+        self.tomorrow = DAY + timedelta(days=1)
+        make_day(day=self.tomorrow, price=expensive_pattern)
+
+    def alert(self, **fields):
+        defaults = dict(user=self.anna, enabled=True, threshold_ore=40, expensive_ore=100, incl_vat=False,
+                        notify_cheap=True, warn_expensive=True, notify_email=True, notify_phone=False)
+        return CheapPowerAlert.objects.create(**{**defaults, **fields})
+
+    def send(self, **kwargs):
+        return alerts.send_due_alerts(now=NOW, **kwargs)
+
+    def test_email_contains_both_sections_and_subject_names_both(self):
+        self.alert()
+        self.assertEqual(self.send(), 1)
+        message = mail.outbox[0]
+        self.assertEqual(message.subject, "Billig og dyr strøm i morgen (DK1): billigst kl. 12:00–15:00, dyrest kl. 15:00–20:00")
+        self.assertIn("Billigt (under 40,0 øre/kWh ekskl. moms):", message.body)
+        self.assertIn("Dyrt (over 100,0 øre/kWh ekskl. moms):", message.body)
+        self.assertIn("kl. 15:00–20:00 (5 timer): gennemsnit 160,0 øre/kWh, højeste 160,0", message.body)
+
+    def test_expensive_only_subjects(self):
+        self.alert(notify_cheap=False)
+        self.send()
+        self.assertEqual(mail.outbox[0].subject, "Dyr strøm i morgen (DK1): kl. 15:00–20:00 · 160,0 øre/kWh")
+        self.assertNotIn("Billigt", mail.outbox[0].body)
+        mail.outbox.clear()
+        AlertLog.objects.all().delete()
+        CheapPowerAlert.objects.update(expensive_ore=50)  # nu er både 80 og 160 øre dyrt
+        self.send()
+        # 15–20 (160 øre) og 20–24 (90 øre) ligger op ad hinanden og er begge dyre, så de er én periode
+        self.assertIn("2 perioder, dyrest kl. 15:00–00:00", mail.outbox[0].subject)
+
+    def test_expensive_warning_alone_is_enough_to_trigger(self):
+        make_day(day=self.tomorrow + timedelta(days=1), price=lambda h: 1600)  # kun dyrt
+        self.alert(notify_cheap=True, warn_expensive=True)
+        SpotPrice.objects.filter(time__lt=analysis.day_bounds(self.tomorrow + timedelta(days=1))[0]).delete()
+        alerts.send_due_alerts(now=utc(2026, 6, 16, 8, 0))
+        self.assertEqual(len(mail.outbox), 1)
+        self.assertTrue(mail.outbox[0].subject.startswith("Dyr strøm"))
+
+    def test_phone_only(self):
+        self.alert(notify_email=False, notify_phone=True, ntfy_topic="elpris-abcdefghij")
+        with mock.patch("elpriser.alerts.push.send_ntfy") as send_ntfy:
+            self.assertEqual(self.send(), 1)
+        self.assertEqual(len(mail.outbox), 0)
+        (topic, title, message), kwargs = send_ntfy.call_args
+        self.assertEqual(topic, "elpris-abcdefghij")
+        self.assertTrue(title.startswith("Billig og dyr strøm i morgen (DK1)"))
+        self.assertIn("I morgen: billigt kl. 00:00–06:00 (30,0 øre), kl. 12:00–15:00 (20,0 øre); dyrt kl. 15:00–20:00 (160,0 øre)", message)
+        self.assertIn("dato=2026-06-16", kwargs["click"])
+        self.assertEqual(kwargs["tags"], ["zap"])
+
+    def test_expensive_only_push_uses_warning_tag(self):
+        self.alert(notify_cheap=False, notify_email=False, notify_phone=True, ntfy_topic="elpris-abcdefghij")
+        with mock.patch("elpriser.alerts.push.send_ntfy") as send_ntfy:
+            self.send()
+        self.assertEqual(send_ntfy.call_args.kwargs["tags"], ["warning"])
+
+    def test_both_channels(self):
+        self.alert(notify_phone=True, ntfy_topic="elpris-abcdefghij")
+        with mock.patch("elpriser.alerts.push.send_ntfy") as send_ntfy:
+            self.assertEqual(self.send(), 1)  # én bruger fik besked
+        self.assertEqual((len(mail.outbox), send_ntfy.call_count), (1, 1))
+
+    def test_one_failing_channel_does_not_block_the_other_and_day_is_remembered(self):
+        self.alert(notify_phone=True, ntfy_topic="elpris-abcdefghij")
+        with mock.patch("elpriser.alerts.push.send_ntfy", side_effect=push.PushError("nede")), self.assertLogs("elpriser.alerts", "ERROR"):
+            self.assertEqual(self.send(), 1)
+        self.assertEqual(len(mail.outbox), 1)
+        self.assertTrue(AlertLog.objects.filter(user=self.anna, date=self.tomorrow).exists())  # ingen dobbelt-mail senere
+
+    def test_all_channels_failing_means_retry_next_time(self):
+        self.alert(notify_phone=True, ntfy_topic="elpris-abcdefghij")
+        with mock.patch("elpriser.alerts.push.send_ntfy", side_effect=push.PushError("nede")), \
+             mock.patch.object(mail.EmailMessage, "send", side_effect=OSError("nede")), self.assertLogs("elpriser.alerts", "ERROR"):
+            self.assertEqual(self.send(), 0)
+        self.assertFalse(AlertLog.objects.exists())
+        with mock.patch("elpriser.alerts.push.send_ntfy"):
+            self.assertEqual(self.send(), 1)
+
+    def test_eligibility_rules(self):
+        alert = self.alert(notify_email=False, notify_phone=True, ntfy_topic="")  # telefon uden emne
+        self.assertEqual(self.send(), 0)
+        alert.ntfy_topic = "elpris-abcdefghij"
+        alert.notify_phone = False
+        alert.save()
+        self.assertEqual(self.send(), 0)  # hverken e-mail eller telefon valgt
+        alert.notify_email = True
+        alert.notify_cheap = alert.warn_expensive = False
+        alert.save()
+        self.assertEqual(self.send(), 0)  # intet at give besked om
+        self.assertEqual(len(mail.outbox), 0)
+
+    def test_phone_user_without_email_address_is_served(self):
+        self.anna.email = ""
+        self.anna.save()
+        self.alert(notify_email=False, notify_phone=True, ntfy_topic="elpris-abcdefghij")
+        with mock.patch("elpriser.alerts.push.send_ntfy") as send_ntfy:
+            self.assertEqual(self.send(), 1)
+        send_ntfy.assert_called_once()
+
+    def test_dry_run_sends_nothing_on_any_channel(self):
+        self.alert(notify_phone=True, ntfy_topic="elpris-abcdefghij")
+        with mock.patch("elpriser.alerts.push.send_ntfy") as send_ntfy:
+            self.assertEqual(self.send(dry_run=True), 1)
+        self.assertEqual((len(mail.outbox), send_ntfy.call_count, AlertLog.objects.count()), (0, 0, 0))
+
+
+@override_settings(NTFY_SERVER="https://ntfy.example.org/", NTFY_TOKEN="")
+class PushTests(SimpleTestCase):
+    def send(self, topic="elpris-abcdefghij", **kwargs):
+        opener = fake_urlopen({"id": "x"})
+        with mock.patch("elpriser.push.urllib.request.urlopen", opener):
+            push.send_ntfy(topic, "Titel – med æøå", "Besked", **kwargs)
+        return opener.call_args
+
+    def test_posts_json_to_the_configured_server_only(self):
+        (request,), kwargs = self.send(click="https://x.dk/", tags=["zap"], priority=4)
+        self.assertEqual(request.full_url, "https://ntfy.example.org/")
+        self.assertEqual(request.get_method(), "POST")
+        payload = json.loads(request.data.decode("utf-8"))
+        self.assertEqual(payload, {"topic": "elpris-abcdefghij", "title": "Titel – med æøå", "message": "Besked",
+                                   "priority": 4, "tags": ["zap"], "click": "https://x.dk/"})
+        self.assertEqual(request.get_header("Content-type"), "application/json")
+        self.assertNotIn("Authorization", request.headers)
+        self.assertEqual(kwargs["timeout"], 15)
+
+    @override_settings(NTFY_TOKEN="hemmelig")
+    def test_token_is_sent_when_configured(self):
+        (request,), _ = self.send()
+        self.assertEqual(request.get_header("Authorization"), "Bearer hemmelig")
+
+    def test_invalid_topics_are_refused_before_any_request(self):
+        for bad in ("", "kort", "med/skråstreg-123456", "../etc/passwd", "a" * 65, "mellem rum 123", None, "https://ond.dk/x12345678"):
+            with mock.patch("elpriser.push.urllib.request.urlopen") as opener, self.assertRaises(push.PushError):
+                push.send_ntfy(bad, "t", "m")
+            opener.assert_not_called()
+
+    def test_errors_become_pusherror(self):
+        for error, text in ((http_error(403), "HTTP 403"), (urllib.error.URLError("ingen forbindelse"), "ingen forbindelse"), (TimeoutError("langsom"), "langsom")):
+            with mock.patch("elpriser.push.urllib.request.urlopen", mock.Mock(side_effect=error)):
+                with self.assertRaisesMessage(push.PushError, text):
+                    push.send_ntfy("elpris-abcdefghij", "t", "m")
+
+    def test_new_topics_are_random_valid_and_prefixed(self):
+        topics = {push.new_topic() for _ in range(50)}
+        self.assertEqual(len(topics), 50)
+        self.assertTrue(all(push.TOPIC_RE.match(t) and t.startswith("elpris-") for t in topics))
+
+    def test_topic_url(self):
+        self.assertEqual(push.topic_url("elpris-abcdefghij"), "https://ntfy.example.org/elpris-abcdefghij")
+
+
+class AlertChannelFormTests(TestCase):
+    @classmethod
+    def setUpTestData(cls):
+        cls.anna = User.objects.create_user("anna", password="pw", email="anna@example.dk")
+        cls.bo = User.objects.create_user("bo", password="pw", email="bo@example.dk")
+
+    def form(self, user=None, instance=None, **overrides):
+        user = user or self.anna
+        return alerts_form(user, instance or CheapPowerAlert.objects.get_or_create(user=user)[0], **overrides)
+
+    def test_topic_generated_once_when_phone_is_enabled_and_kept(self):
+        first = self.form(notify_phone="on")
+        self.assertTrue(first.is_valid(), first.errors)
+        topic = first.save().ntfy_topic
+        self.assertTrue(push.TOPIC_RE.match(topic))
+        again = self.form(notify_phone="on", instance=CheapPowerAlert.objects.get(user=self.anna))
+        again.is_valid()
+        self.assertEqual(again.save().ntfy_topic, topic)
+        off = self.form(instance=CheapPowerAlert.objects.get(user=self.anna))  # telefon fra: emnet bevares
+        off.is_valid()
+        self.assertEqual(off.save().ntfy_topic, topic)
+
+    def test_no_topic_when_phone_is_never_enabled(self):
+        form = self.form()
+        form.is_valid()
+        self.assertEqual(form.save().ntfy_topic, "")
+
+    def test_users_get_different_topics(self):
+        a, b = self.form(notify_phone="on"), self.form(user=self.bo, notify_phone="on")
+        a.is_valid(), b.is_valid()
+        self.assertNotEqual(a.save().ntfy_topic, b.save().ntfy_topic)
+
+    def test_topic_cannot_be_set_through_the_form(self):
+        form = self.form(notify_phone="on", ntfy_topic="andres-emne-123456")
+        form.is_valid()
+        self.assertNotEqual(form.save().ntfy_topic, "andres-emne-123456")
+
+    def test_validation_rules(self):
+        self.assertIn("højere end", " ".join(self.form(warn_expensive="on", expensive_ore="30").errors["expensive_ore"]))
+        self.assertIn("højere end", " ".join(self.form(warn_expensive="on", expensive_ore="40").errors["expensive_ore"]))
+        self.assertTrue(self.form(warn_expensive="on", expensive_ore="41").is_valid())
+        # grænserne må gerne «krydse», når kun én slags besked er valgt
+        self.assertTrue(self.form(warn_expensive="on", notify_cheap=None, expensive_ore="10").is_valid())
+        self.assertFalse(self.form(notify_cheap=None).is_valid())  # hverken billig eller dyr
+        self.assertFalse(self.form(notify_email=None).is_valid())  # ingen kanal
+        self.assertTrue(self.form(notify_email=None, notify_phone="on", email="").is_valid())  # kun telefon: e-mail ikke nødvendig
+        self.assertIn("email", self.form(email="").errors)  # e-mail valgt uden adresse
+
+    def test_nothing_is_required_while_disabled(self):
+        self.assertTrue(self.form(enabled=None, notify_cheap=None, notify_email=None, email="").is_valid())
+
+
+@mock.patch("elpriser.views.local_today", return_value=DAY)
+class PhonePageTests(TestCase):
+    @classmethod
+    def setUpTestData(cls):
+        cls.anna = User.objects.create_user("anna", password="pw", email="anna@example.dk")
+        cls.bo = User.objects.create_user("bo", password="pw", email="bo@example.dk")
+
+    def save_phone(self, user):
+        self.client.force_login(user)
+        self.client.post(reverse("elpriser:alerts"), {**ALERT_POST, "notify_phone": "on", "email": user.email})
+        return CheapPowerAlert.objects.get(user=user).ntfy_topic
+
+    def test_page_shows_setup_instructions_only_to_the_owner(self, _):
+        topic = self.save_phone(self.anna)
+        page = self.client.get(reverse("elpriser:alerts"))
+        self.assertContains(page, "Sådan får du beskeder på telefonen")
+        self.assertContains(page, topic)
+        self.client.force_login(self.bo)
+        other = self.client.get(reverse("elpriser:alerts"))
+        self.assertNotContains(other, topic)
+        self.assertNotContains(other, "Sådan får du beskeder på telefonen")
+
+    def test_phone_test_notification(self, _):
+        topic = self.save_phone(self.anna)
+        with mock.patch("elpriser.views.push.send_ntfy") as send_ntfy:
+            response = self.client.post(reverse("elpriser:alerts_test_phone"), follow=True)
+        self.assertEqual(send_ntfy.call_args.args[0], topic)
+        self.assertContains(response, "Testbesked sendt")
+
+    def test_phone_test_failure_and_missing_topic(self, _):
+        self.client.force_login(self.anna)
+        self.assertContains(self.client.post(reverse("elpriser:alerts_test_phone"), follow=True), "Slå «besked til telefonen» til")
+        self.save_phone(self.anna)
+        with mock.patch("elpriser.views.push.send_ntfy", side_effect=push.PushError("ntfy svarede HTTP 429.")):
+            self.assertContains(self.client.post(reverse("elpriser:alerts_test_phone"), follow=True), "HTTP 429")
+
+    def test_new_topic_replaces_old_and_is_post_only_and_private(self, _):
+        old = self.save_phone(self.anna)
+        bos = self.save_phone(self.bo)
+        self.client.force_login(self.anna)
+        self.assertEqual(self.client.get(reverse("elpriser:alerts_new_topic")).status_code, 405)
+        self.client.post(reverse("elpriser:alerts_new_topic"))
+        new = CheapPowerAlert.objects.get(user=self.anna).ntfy_topic
+        self.assertNotEqual(new, old)
+        self.assertTrue(push.TOPIC_RE.match(new))
+        self.assertEqual(CheapPowerAlert.objects.get(user=self.bo).ntfy_topic, bos)
+
+    def test_login_required_for_phone_endpoints(self, _):
+        for name in ("alerts_test_phone", "alerts_new_topic"):
+            response = self.client.post(reverse(f"elpriser:{name}"))
+            self.assertEqual(response.status_code, 302)
+            self.assertIn(reverse("accounts:login"), response["Location"])
+
+    def test_preview_shows_expensive_periods_and_share(self, _):
+        make_day(day=DAY, price=expensive_pattern)
+        self.client.force_login(self.anna)
+        self.client.post(reverse("elpriser:alerts"), {**ALERT_POST, "incl_vat": "", "warn_expensive": "on", "expensive_ore": "100", "email": self.anna.email})
+        page = self.client.get(reverse("elpriser:alerts"))
+        today = {d["label"]: d for d in page.context["preview"]["days"]}["I dag"]
+        self.assertEqual(hours_of(today["expensive"]), [("15:00", "20:00")])
+        self.assertEqual(page.context["preview"]["expensive_share"], round(100 * 5 / 24))
+        self.assertContains(page, "dyr")

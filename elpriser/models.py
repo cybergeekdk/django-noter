@@ -56,7 +56,7 @@ class CheapPowerAlert(models.Model):
     HOURS_CHOICES = [(1, "mindst 1 time i træk"), (2, "mindst 2 timer i træk"), (3, "mindst 3 timer i træk"), (4, "mindst 4 timer i træk")]
 
     user = models.OneToOneField(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name="cheap_alert")
-    enabled = models.BooleanField("send mig besked, når strømmen er billig", default=False)
+    enabled = models.BooleanField("send mig besked om billig og dyr strøm", default=False)
     area = models.CharField("prisområde", max_length=3, choices=SpotPrice.Area.choices, default=SpotPrice.Area.DK1)
     threshold_ore = models.DecimalField(
         "billig er under",
@@ -68,10 +68,26 @@ class CheapPowerAlert(models.Model):
     )
     incl_vat = models.BooleanField("grænsen er inkl. moms", default=True)
     min_hours = models.PositiveSmallIntegerField("varighed", choices=HOURS_CHOICES, default=1)
+    notify_cheap = models.BooleanField("besked om billige perioder", default=True)
+    warn_expensive = models.BooleanField("advar også om dyre perioder", default=False)
+    expensive_ore = models.DecimalField(
+        "dyr er over",
+        max_digits=6,
+        decimal_places=2,
+        default=100,
+        validators=[MinValueValidator(-100), MaxValueValidator(1000)],
+        help_text="øre/kWh (samme moms-valg som grænsen for billig).",
+    )
+    notify_email = models.BooleanField("send e-mail", default=True)
+    notify_phone = models.BooleanField("send besked til telefonen (ntfy)", default=False)
+    ntfy_topic = models.CharField(max_length=64, blank=True, editable=False)
 
     class Meta:
         verbose_name = "prisbesked"
         verbose_name_plural = "prisbeskeder"
+        constraints = [
+            models.UniqueConstraint(fields=["ntfy_topic"], condition=~models.Q(ntfy_topic=""), name="unique_ntfy_topic"),
+        ]
 
     def __str__(self):
         return f"{self.user} ({'til' if self.enabled else 'fra'}, {self.area} < {self.threshold_ore})"
