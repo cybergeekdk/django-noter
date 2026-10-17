@@ -161,6 +161,34 @@ Mislykkede kald prøves op til 3 gange. Indstillinger (miljøvariabler): `ENERGI
 (standard `https://api.energidataservice.dk`), `ENERGINET_DATASET` (standard `DayAheadPrices`),
 `ENERGINET_TIMEOUT` (sekunder, standard 30).
 
+### Besked, når strømmen er billig
+
+Logget ind kan man under **Få besked om billig strøm** (`/elpriser/besked/`) få en e-mail, når
+næste døgns priser er ude, og der er en billig periode. Standardområdet er **DK1** (vest for
+Storebælt: Jylland og Fyn); DK2 er øst for. Man vælger selv:
+
+- **Hvad der er billigt**: en grænse i øre/kWh (med eller uden moms; også negative priser)
+- **Hvor længe**: mindst 1–4 timer i træk, så korte udsving ikke giver støj
+- **E-mailadresse** og **område**
+
+Der sendes højst én mail pr. kørsel, og hver dag vurderes kun én gang, da day-ahead-priser ikke
+ændrer sig, når de er offentliggjort. Er der ingen billige perioder, sendes intet. Mailen viser
+perioderne (fra–til, gennemsnit og laveste pris) og et link til dagens graf. Siden viser, hvornår
+man ville have fået besked de seneste dage, og hvor stor en del af tiden prisen var under
+grænsen, så man kan finde en passende grænse. Ændres indstillingerne, vurderes i dag og i morgen igen.
+
+Beskederne sendes af en kommando, der kører efter hentning af priser. Brug `--notify`, så ét
+cron-job klarer begge dele:
+
+```cron
+7 * * * *        cd /sti/til/django_projekt && .venv/bin/python manage.py fetch_elpriser --notify
+*/10 13-14 * * * cd /sti/til/django_projekt && .venv/bin/python manage.py fetch_elpriser --notify
+```
+
+(`python manage.py send_cheap_power_alerts [--dry-run]` kan også køres alene.) Mailopsætningen er den
+samme som til garantipåmindelserne (miljøvariablerne `EMAIL_HOST` m.fl., se afsnittet om udstyr);
+på indstillingssiden kan man sende sig selv en testmail.
+
 > **Kør `python manage.py fetch_elpriser --check-api` første gang.** Koden blev skrevet i et miljø
 > uden adgang til Energinets API og dokumentation, så datasættets navn og kolonner (`DayAheadPrices`
 > med `TimeUTC`, `PriceArea`, `DayAheadPriceDKK`) er bygget efter, hvad der var kendt, og testene

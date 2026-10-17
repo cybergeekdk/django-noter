@@ -10,4 +10,6 @@ urlpatterns = [
     path("api/dage/", views.api_days, name="api_days"),
     path("api/profil/", views.api_profile, name="api_profile"),
     path("opdater/", views.refresh, name="refresh"),
+    path("besked/", views.alerts, name="alerts"),
+    path("besked/test/", views.alerts_test, name="alerts_test"),
 ]

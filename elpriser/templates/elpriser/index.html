@@ -21,12 +21,17 @@
         {% if stale %}<span class="badge text-bg-warning ms-1">Data kan være forældede</span>{% endif %}
       </div>
     </div>
-    {% if user.is_superuser %}
-      <form method="post" action="{% url 'elpriser:refresh' %}">
-        {% csrf_token %}
-        <button type="submit" class="btn btn-sm btn-outline-secondary"><i class="bi bi-arrow-repeat me-1"></i>Opdatér nu</button>
-      </form>
-    {% endif %}
+    <div class="d-flex gap-2">
+      <a href="{% url 'elpriser:alerts' %}" class="btn btn-sm {% if alert %}btn-success{% else %}btn-outline-primary{% endif %}">
+        <i class="bi bi-bell{% if alert %}-fill{% endif %} me-1"></i>{% if alert %}Besked til ({{ alert.area }}){% else %}Få besked om billig strøm{% endif %}
+      </a>
+      {% if user.is_superuser %}
+        <form method="post" action="{% url 'elpriser:refresh' %}">
+          {% csrf_token %}
+          <button type="submit" class="btn btn-sm btn-outline-secondary"><i class="bi bi-arrow-repeat me-1"></i>Opdatér nu</button>
+        </form>
+      {% endif %}
+    </div>
   </div>
 
   {% if user.is_superuser and last_failed %}

@@ -13,6 +13,7 @@ from decimal import Decimal
 from unittest import mock
 
 from django.contrib.auth import get_user_model
+from django.core import mail
 from django.core.management import call_command
 from django.core.management.base import CommandError
 from django.test import SimpleTestCase, TestCase
@@ -524,3 +525,395 @@ class CommandTests(TestCase):
         with mock.patch("elpriser.client.urllib.request.urlopen", mock.Mock(side_effect=http_error(403, b"forbudt"))):
             with self.assertRaisesMessage(CommandError, "HTTP 403"):
                 self.run_command("--check-api")
+
+
+# --- Besked om billig strøm --------------------------------------------------------------------
+
+from . import alerts  # noqa: E402
+from .models import AlertLog, CheapPowerAlert  # noqa: E402
+
+NOW = utc(2026, 6, 15, 8, 0)  # 10:00 dansk tid den 15. juni 2026
+
+
+def cheap_pattern(hour):
+    """DKK/MWh pr. dansk time: 0–5 → 300 (30 øre), 6–11 → 800, 12–14 → 200 (20 øre), 15–23 → 900."""
+    return 300 if hour < 6 else 800 if hour < 12 else 200 if hour < 15 else 900
+
+
+def hours_of(period_list):
+    return [(p.start.astimezone(service.DK_TZ).strftime("%H:%M"), p.end.astimezone(service.DK_TZ).strftime("%H:%M")) for p in period_list]
+
+
+class FindPeriodsTests(SimpleTestCase):
+    def points(self, prices, step=60):
+        return [(utc(2026, 6, 15, 0) + timedelta(minutes=step * i), float(p)) for i, p in enumerate(prices)]
+
+    def find(self, prices, threshold=40, vat=False, minutes=60, step=60):
+        return alerts.find_periods(self.points(prices, step), step, threshold, vat, minutes)
+
+    def test_finds_separate_periods_with_stats(self):
+        periods = self.find([300, 300, 900, 200, 400, 900])  # 30, 30, 90, 20, 40, 90 øre
+        self.assertEqual([(p.start.hour, p.end.hour) for p in periods], [(0, 2), (3, 5)])
+        self.assertEqual((periods[0].avg, periods[0].low, periods[0].hours), (30.0, 30.0, 2.0))
+        self.assertEqual((periods[1].avg, periods[1].low), (30.0, 20.0))
+
+    def test_threshold_is_inclusive(self):
+        self.assertEqual(len(self.find([400])), 1)  # præcis 40 øre
+        self.assertEqual(len(self.find([401])), 0)
+
+    def test_vat_changes_what_is_cheap(self):
+        self.assertEqual(len(self.find([350], threshold=40, vat=False)), 1)  # 35
+        self.assertEqual(len(self.find([350], threshold=40, vat=True)), 0)  # 43,75 med moms
+
+    def test_negative_prices_and_negative_threshold(self):
+        self.assertEqual(len(self.find([-50, 300], threshold=0)), 1)  # -5 øre er under 0
+        self.assertEqual(len(self.find([-200, 300], threshold=-10)), 1)  # -20 øre er under -10
+        self.assertEqual(len(self.find([-50, 300], threshold=-10)), 0)  # -5 øre er IKKE under -10
+
+    def test_minimum_duration(self):
+        self.assertEqual(self.find([300, 900, 300, 300, 900], minutes=120)[0].hours, 2.0)
+        self.assertEqual(len(self.find([300, 900, 300, 300, 900], minutes=120)), 1)
+        self.assertEqual(self.find([300, 900, 300, 900], minutes=120), [])
+
+    def test_quarter_hours(self):
+        periods = self.find([300, 300, 300, 300, 900, 300, 300], step=15, minutes=60)
+        self.assertEqual(len(periods), 1)
+        self.assertEqual(periods[0].hours, 1.0)
+
+    def test_gap_in_data_breaks_a_period(self):
+        points = [(utc(2026, 6, 15, 0), 300.0), (utc(2026, 6, 15, 1), 300.0), (utc(2026, 6, 15, 5), 300.0), (utc(2026, 6, 15, 6), 300.0)]
+        periods = alerts.find_periods(points, 60, 40, False, 60)
+        self.assertEqual([(p.start.hour, p.end.hour) for p in periods], [(0, 2), (5, 7)])
+
+    def test_nothing_cheap(self):
+        self.assertEqual(self.find([900, 900]), [])
+        self.assertEqual(self.find([]), [])
+
+
+class AlertSendingTests(TestCase):
+    @classmethod
+    def setUpTestData(cls):
+        cls.anna = User.objects.create_user("anna", password="pw", email="anna@example.dk")
+        cls.bo = User.objects.create_user("bo", password="pw", email="bo@example.dk")
+
+    def setUp(self):
+        mail.outbox.clear()
+        self.alert = CheapPowerAlert.objects.create(user=self.anna, enabled=True, threshold_ore=40, incl_vat=True, min_hours=1)
+        self.tomorrow = DAY + timedelta(days=1)
+
+    def send(self, **kwargs):
+        return alerts.send_due_alerts(now=NOW, **kwargs)
+
+    def test_sends_one_mail_for_tomorrow_when_prices_are_out(self):
+        make_day(day=self.tomorrow, price=cheap_pattern)
+        self.assertEqual(self.send(), 1)
+        message = mail.outbox[0]
+        self.assertEqual(message.to, ["anna@example.dk"])
+        self.assertIn("i morgen", message.subject)
+        self.assertIn("(DK1)", message.subject)
+        self.assertIn("2 perioder", message.subject)
+        self.assertIn("kl. 00:00–06:00 (6 timer): gennemsnit 37,5 øre/kWh", message.body)  # 300 DKK/MWh = 30 øre + moms
+        self.assertIn("kl. 12:00–15:00 (3 timer): gennemsnit 25,0 øre/kWh, laveste 25,0\n\nSe hele dagen:", message.body)
+        self.assertIn("inkl. moms", message.body)
+        self.assertIn("dato=2026-06-16", message.body)
+        self.assertIn("/elpriser/besked/", message.body)
+        self.assertTrue(AlertLog.objects.get(user=self.anna, date=self.tomorrow).sent)
+
+    def test_single_period_subject_has_time_and_price(self):
+        make_day(day=self.tomorrow, price=lambda h: 200 if 12 <= h < 15 else 900)
+        self.send()
+        self.assertEqual(mail.outbox[0].subject, "Billig strøm i morgen (DK1): kl. 12:00–15:00 · 25,0 øre/kWh")
+
+    def test_only_one_mail_per_day_even_when_run_repeatedly(self):
+        make_day(day=self.tomorrow, price=cheap_pattern)
+        self.assertEqual(self.send(), 1)
+        self.assertEqual(self.send(), 0)
+        self.assertEqual(self.send(), 0)
+        self.assertEqual(len(mail.outbox), 1)
+
+    def test_today_and_tomorrow_are_combined_in_one_mail_and_past_periods_are_dropped(self):
+        make_day(day=DAY, price=cheap_pattern)
+        make_day(day=self.tomorrow, price=cheap_pattern)
+        self.assertEqual(self.send(), 1)
+        self.assertEqual(len(mail.outbox), 1)
+        body = mail.outbox[0].body
+        self.assertIn("i dag og i morgen", mail.outbox[0].subject)
+        today_part, tomorrow_part = body.split("I morgen (")
+        self.assertNotIn("00:00–06:00", today_part)  # klokken er 10: natten er forbi
+        self.assertIn("12:00–15:00", today_part)
+        self.assertIn("00:00–06:00", tomorrow_part)
+        self.assertEqual(AlertLog.objects.filter(user=self.anna).count(), 2)
+
+    def test_no_cheap_periods_means_no_mail_but_day_is_remembered(self):
+        make_day(day=self.tomorrow, price=lambda h: 900)
+        self.assertEqual(self.send(), 0)
+        self.assertEqual(len(mail.outbox), 0)
+        self.assertFalse(AlertLog.objects.get(user=self.anna, date=self.tomorrow).sent)
+
+    def test_waits_for_prices_and_for_complete_data(self):
+        self.assertEqual(self.send(), 0)  # ingen priser endnu
+        self.assertFalse(AlertLog.objects.exists())  # og dagen vurderes igen senere
+        rows = make_day(day=self.tomorrow, price=cheap_pattern)
+        SpotPrice.objects.filter(time__gte=rows[12].time).delete()  # kun halv dag hentet
+        self.assertEqual(self.send(), 0)
+        self.assertFalse(AlertLog.objects.exists())
+        SpotPrice.objects.all().delete()
+        make_day(day=self.tomorrow, price=cheap_pattern)  # nu er hele dagen hentet
+        self.assertEqual(self.send(), 1)
+
+    def test_vat_setting_decides_what_counts(self):
+        make_day(day=self.tomorrow, price=cheap_pattern)
+        self.alert.threshold_ore = 35  # 30 øre uden moms er billig, 37,5 med moms er ikke
+        self.alert.save()
+        self.send()
+        self.assertEqual(mail.outbox[0].subject.count("perioder"), 0)  # kun nattens periode falder fra
+        self.assertIn("12:00–15:00", mail.outbox[0].body)
+        self.assertNotIn("00:00–06:00", mail.outbox[0].body)
+        mail.outbox.clear()
+        AlertLog.objects.all().delete()
+        self.alert.incl_vat = False
+        self.alert.save()
+        self.send()
+        self.assertIn("00:00–06:00", mail.outbox[0].body)
+
+    def test_minimum_duration_filters_short_periods(self):
+        make_day(day=self.tomorrow, price=cheap_pattern)
+        self.alert.min_hours = 4
+        self.alert.save()
+        self.send()
+        self.assertIn("00:00–06:00", mail.outbox[0].body)
+        self.assertNotIn("12:00–15:00", mail.outbox[0].body)  # kun 3 timer
+
+    def test_works_with_quarter_hour_data(self):
+        make_day(day=self.tomorrow, step=15, price=cheap_pattern)
+        self.send()
+        self.assertIn("kl. 12:00–15:00 (3 timer)", mail.outbox[0].body)
+
+    def test_uses_the_chosen_area(self):
+        make_day("DK1", day=self.tomorrow, price=lambda h: 900)
+        make_day("DK2", day=self.tomorrow, price=cheap_pattern)
+        self.assertEqual(self.send(), 0)  # DK1 er dyrt
+        self.alert.area = "DK2"
+        self.alert.save()
+        AlertLog.objects.all().delete()  # det gør formularen, når man ændrer indstillinger
+        self.assertEqual(self.send(), 1)
+        self.assertIn("(DK2)", mail.outbox[0].subject)
+
+    def test_disabled_users_without_email_and_inactive_users_get_nothing(self):
+        make_day(day=self.tomorrow, price=cheap_pattern)
+        self.alert.enabled = False
+        self.alert.save()
+        self.assertEqual(self.send(), 0)
+        self.alert.enabled = True
+        self.alert.save()
+        self.anna.email = ""
+        self.anna.save()
+        self.assertEqual(self.send(), 0)
+        self.anna.email = "anna@example.dk"
+        self.anna.is_active = False
+        self.anna.save()
+        self.assertEqual(self.send(), 0)
+        self.assertEqual((len(mail.outbox), AlertLog.objects.count()), (0, 0))
+
+    def test_each_user_gets_their_own_settings(self):
+        make_day(day=self.tomorrow, price=cheap_pattern)
+        CheapPowerAlert.objects.create(user=self.bo, enabled=True, threshold_ore=10, incl_vat=False)  # strengere grænse
+        self.assertEqual(self.send(), 1)
+        self.assertEqual([m.to[0] for m in mail.outbox], ["anna@example.dk"])
+        self.assertEqual(AlertLog.objects.filter(user=self.bo, sent=False).count(), 1)
+
+    def test_failure_does_not_block_others_and_is_retried(self):
+        make_day(day=self.tomorrow, price=cheap_pattern)
+        CheapPowerAlert.objects.create(user=self.bo, enabled=True, threshold_ore=40, incl_vat=True)
+        real_send = mail.EmailMessage.send
+
+        def flaky(message, *args, **kwargs):
+            if message.to == ["anna@example.dk"]:
+                raise OSError("SMTP nede")
+            return real_send(message, *args, **kwargs)
+
+        with mock.patch.object(mail.EmailMessage, "send", flaky), self.assertLogs("elpriser.alerts", "ERROR"):
+            self.assertEqual(self.send(), 1)
+        self.assertEqual([m.to[0] for m in mail.outbox], ["bo@example.dk"])
+        self.assertFalse(AlertLog.objects.filter(user=self.anna).exists())  # ikke husket: prøves igen
+        self.assertEqual(self.send(), 1)
+        self.assertEqual(len(mail.outbox), 2)
+
+    def test_dry_run_changes_nothing(self):
+        make_day(day=self.tomorrow, price=cheap_pattern)
+        self.assertEqual(self.send(dry_run=True), 1)
+        self.assertEqual((len(mail.outbox), AlertLog.objects.count()), (0, 0))
+
+    def test_yesterdays_log_does_not_block_new_days(self):
+        AlertLog.objects.create(user=self.anna, date=DAY - timedelta(days=1), sent=True)
+        make_day(day=self.tomorrow, price=cheap_pattern)
+        self.assertEqual(self.send(), 1)
+
+    def test_saving_settings_makes_pending_days_be_evaluated_again(self):
+        make_day(day=self.tomorrow, price=cheap_pattern)
+        self.send()
+        mail.outbox.clear()
+        with mock.patch("django.utils.timezone.localdate", return_value=DAY):
+            form = alerts_form(self.anna, self.alert, threshold_ore="40")
+            self.assertTrue(form.is_valid(), form.errors)
+            form.save()
+        self.assertEqual(AlertLog.objects.filter(user=self.anna).count(), 0)
+        self.assertEqual(self.send(), 1)
+
+
+def alerts_form(user, instance, **overrides):
+    from .forms import AlertForm
+
+    data = {"enabled": "on", "area": "DK1", "threshold_ore": "40", "incl_vat": "on", "min_hours": "1", "email": user.email, **overrides}
+    return AlertForm(data, instance=instance, user=user)
+
+
+class AlertFormTests(TestCase):
+    @classmethod
+    def setUpTestData(cls):
+        cls.anna = User.objects.create_user("anna", password="pw", email="anna@example.dk")
+
+    def form(self, **overrides):
+        return alerts_form(self.anna, CheapPowerAlert(user=self.anna), **overrides)
+
+    def test_valid_and_saves_email(self):
+        form = self.form(email="ny@example.dk", threshold_ore="32.5")
+        self.assertTrue(form.is_valid(), form.errors)
+        form.save()
+        self.anna.refresh_from_db()
+        self.assertEqual(self.anna.email, "ny@example.dk")
+        self.assertEqual(CheapPowerAlert.objects.get().threshold_ore, Decimal("32.50"))
+
+    def test_enabling_requires_email(self):
+        self.assertIn("email", self.form(email="").errors)
+        self.assertTrue(self.form(email="", enabled="").is_valid())
+
+    def test_invalid_values(self):
+        for overrides in ({"threshold_ore": "mange"}, {"threshold_ore": "5000"}, {"threshold_ore": "-500"}, {"area": "SE3"}, {"min_hours": "9"}, {"email": "ikke-en-mail"}):
+            self.assertFalse(self.form(**overrides).is_valid(), overrides)
+
+    def test_negative_threshold_is_allowed(self):
+        self.assertTrue(self.form(threshold_ore="-5").is_valid())
+
+    def test_default_area_is_west_of_great_belt(self):
+        self.assertEqual(CheapPowerAlert().area, "DK1")
+
+
+@mock.patch("elpriser.views.local_today", return_value=DAY)
+class AlertPageTests(TestCase):
+    @classmethod
+    def setUpTestData(cls):
+        cls.anna = User.objects.create_user("anna", password="pw", email="anna@example.dk")
+
+    def setUp(self):
+        mail.outbox.clear()
+
+    def test_login_required(self, _):
+        for name in ("alerts", "alerts_test"):
+            response = self.client.get(reverse(f"elpriser:{name}")) if name == "alerts" else self.client.post(reverse(f"elpriser:{name}"))
+            self.assertEqual(response.status_code, 302)
+            self.assertIn(reverse("accounts:login"), response["Location"])
+
+    def test_page_defaults_to_dk1_and_is_disabled(self, _):
+        self.client.force_login(self.anna)
+        response = self.client.get(reverse("elpriser:alerts"))
+        self.assertContains(response, "vest for Storebælt")
+        self.assertContains(response, '<option value="DK1" selected>')
+        self.assertFalse(CheapPowerAlert.objects.get(user=self.anna).enabled)
+
+    def test_save_settings(self, _):
+        self.client.force_login(self.anna)
+        response = self.client.post(reverse("elpriser:alerts"), {
+            "enabled": "on", "area": "DK1", "threshold_ore": "35", "min_hours": "2", "email": "anna@example.dk"})
+        self.assertRedirects(response, reverse("elpriser:alerts"))
+        alert = CheapPowerAlert.objects.get(user=self.anna)
+        self.assertEqual((alert.enabled, alert.area, alert.threshold_ore, alert.incl_vat, alert.min_hours), (True, "DK1", 35, False, 2))
+
+    def test_invalid_settings_show_errors(self, _):
+        self.client.force_login(self.anna)
+        response = self.client.post(reverse("elpriser:alerts"), {"enabled": "on", "area": "DK1", "threshold_ore": "40", "min_hours": "1", "email": ""})
+        self.assertContains(response, "Angiv en e-mailadresse", status_code=400)
+        self.assertFalse(CheapPowerAlert.objects.get(user=self.anna).enabled)
+
+    def test_settings_are_private_per_user(self, _):
+        self.client.force_login(self.anna)
+        self.client.post(reverse("elpriser:alerts"), {"enabled": "on", "area": "DK2", "threshold_ore": "10", "min_hours": "1", "email": "a@b.dk"})
+        other = User.objects.create_user("bo", password="pw")
+        self.client.force_login(other)
+        self.assertContains(self.client.get(reverse("elpriser:alerts")), '<option value="DK1" selected>')
+
+    def test_preview_shows_periods_and_share(self, _):
+        make_day(day=DAY, price=cheap_pattern)
+        make_day(day=DAY - timedelta(days=1), price=lambda h: 900)
+        self.client.force_login(self.anna)
+        response = self.client.get(reverse("elpriser:alerts"))
+        preview = response.context["preview"]
+        by_label = {d["label"]: d for d in preview["days"]}
+        self.assertEqual(hours_of(by_label["I dag"]["periods"]), [("00:00", "06:00"), ("12:00", "15:00")])
+        self.assertEqual(by_label["I dag"]["periods"][0].avg, 37.5)
+        self.assertEqual(len([d for d in preview["days"]]), 2)  # kun dage med data
+        self.assertEqual(by_label.keys() - {"I dag"}, {"søn 14/06"})  # dansk ugedag (14. juni 2026 er en søndag)
+        self.assertEqual(preview["share"], round(100 * 9 / 48))  # 9 af 48 timer er billige (<40 øre inkl. moms)
+        self.assertContains(response, "kl. 00:00–06:00")
+
+    def test_preview_without_data(self, _):
+        self.client.force_login(self.anna)
+        response = self.client.get(reverse("elpriser:alerts"))
+        self.assertContains(response, "ingen priser i databasen")
+        self.assertIsNone(response.context["preview"]["share"])
+
+    def test_test_mail(self, _):
+        self.client.force_login(self.anna)
+        self.assertRedirects(self.client.post(reverse("elpriser:alerts_test")), reverse("elpriser:alerts"))
+        self.assertEqual(mail.outbox[0].to, ["anna@example.dk"])
+        self.assertEqual(self.client.get(reverse("elpriser:alerts_test")).status_code, 405)
+
+    def test_test_mail_without_address_or_on_failure(self, _):
+        self.client.force_login(self.anna)
+        self.anna.email = ""
+        self.anna.save()
+        self.client.post(reverse("elpriser:alerts_test"))
+        self.assertEqual(len(mail.outbox), 0)
+        self.anna.email = "anna@example.dk"
+        self.anna.save()
+        with mock.patch.object(mail.EmailMessage, "send", side_effect=OSError("nede")):
+            self.assertContains(self.client.post(reverse("elpriser:alerts_test"), follow=True), "Mailen kunne ikke sendes")
+
+    def test_index_shows_alert_button_state(self, _):
+        self.assertContains(self.client.get(reverse("elpriser:index")), "Få besked om billig strøm")
+        self.client.force_login(self.anna)
+        self.assertContains(self.client.get(reverse("elpriser:index")), "Få besked om billig strøm")
+        CheapPowerAlert.objects.create(user=self.anna, enabled=True)
+        self.assertContains(self.client.get(reverse("elpriser:index")), "Besked til (DK1)")
+
+
+class AlertCommandTests(TestCase):
+    def test_command_reports_count(self):
+        out = io.StringIO()
+        with mock.patch("elpriser.management.commands.send_cheap_power_alerts.send_due_alerts", return_value=2) as send:
+            call_command("send_cheap_power_alerts", stdout=out)
+        send.assert_called_once_with(dry_run=False)
+        self.assertIn("2 besked(er) sendt", out.getvalue())
+        out = io.StringIO()
+        with mock.patch("elpriser.management.commands.send_cheap_power_alerts.send_due_alerts", return_value=1):
+            call_command("send_cheap_power_alerts", "--dry-run", stdout=out)
+        self.assertIn("ville blive sendt", out.getvalue())
+
+    def test_fetch_with_notify_sends_alerts_after_fetching_only(self):
+        order = []
+        with mock.patch("elpriser.management.commands.fetch_elpriser.update_prices", side_effect=lambda **k: order.append("hent") or service.UpdateResult(1, 0)), \
+             mock.patch("elpriser.management.commands.fetch_elpriser.send_due_alerts", side_effect=lambda: order.append("besked") or 3):
+            out = io.StringIO()
+            call_command("fetch_elpriser", "--notify", stdout=out)
+            self.assertEqual(order, ["hent", "besked"])
+            self.assertIn("3 besked(er)", out.getvalue())
+            order.clear()
+            call_command("fetch_elpriser", stdout=io.StringIO())
+            self.assertEqual(order, ["hent"])
+
+    def test_failed_fetch_does_not_notify(self):
+        with mock.patch("elpriser.management.commands.fetch_elpriser.update_prices", side_effect=EnergiDataError("nede")), \
+             mock.patch("elpriser.management.commands.fetch_elpriser.send_due_alerts") as send:
+            with self.assertRaises(CommandError):
+                call_command("fetch_elpriser", "--notify", stdout=io.StringIO())
+        send.assert_not_called()

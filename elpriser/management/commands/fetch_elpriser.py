@@ -3,6 +3,7 @@ from django.core.management.base import BaseCommand, CommandError
 from datetime import timedelta
 
 from elpriser import analysis
+from elpriser.alerts import send_due_alerts
 from elpriser.client import VALID_AREAS, EnergiDataError, build_url, get_json, parse_records
 from elpriser.service import local_today, update_prices
 
@@ -19,12 +20,17 @@ class Command(BaseCommand):
         parser.add_argument("--days-ahead", type=int, default=1, help="Dage frem (standard 1 = i morgen).")
         parser.add_argument("--area", action="append", choices=VALID_AREAS, help="Prisområde (kan gentages). Standard: begge.")
         parser.add_argument(
+            "--notify",
+            action="store_true",
+            help="Send bagefter besked til brugere, der har bedt om besked om billig strøm (samme som send_cheap_power_alerts).",
+        )
+        parser.add_argument(
             "--check-api",
             action="store_true",
             help="Kontrollér forbindelsen og datasættets opbygning uden at gemme noget.",
         )
 
-    def handle(self, *args, days_back, days_ahead, area, check_api, **options):
+    def handle(self, *args, days_back, days_ahead, area, check_api, notify=False, **options):
         if check_api:
             return self.check_api()
         try:
@@ -36,6 +42,8 @@ class Command(BaseCommand):
         self.stdout.write(self.style.SUCCESS(f"Færdig: {result.rows_new} nye og {result.rows_updated} opdaterede priser."))
         if result.rows == 0:
             self.stdout.write(self.style.WARNING("Ingen priser fundet i tidsrummet. Kør med --check-api for at undersøge."))
+        if notify:
+            self.stdout.write(f"{send_due_alerts()} besked(er) om billig strøm sendt.")
 
     def check_api(self):
         today = local_today()

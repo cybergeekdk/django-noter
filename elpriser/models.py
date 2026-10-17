@@ -1,3 +1,5 @@
+from django.conf import settings
+from django.core.validators import MaxValueValidator, MinValueValidator
 from django.db import models
 
 
@@ -46,3 +48,47 @@ class FetchRun(models.Model):
 
     def __str__(self):
         return f"{self.started:%Y-%m-%d %H:%M} {'OK' if self.ok else 'FEJL'}"
+
+
+class CheapPowerAlert(models.Model):
+    """Brugerens indstillinger for besked, når strømmen er billig."""
+
+    HOURS_CHOICES = [(1, "mindst 1 time i træk"), (2, "mindst 2 timer i træk"), (3, "mindst 3 timer i træk"), (4, "mindst 4 timer i træk")]
+
+    user = models.OneToOneField(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name="cheap_alert")
+    enabled = models.BooleanField("send mig besked, når strømmen er billig", default=False)
+    area = models.CharField("prisområde", max_length=3, choices=SpotPrice.Area.choices, default=SpotPrice.Area.DK1)
+    threshold_ore = models.DecimalField(
+        "billig er under",
+        max_digits=6,
+        decimal_places=2,
+        default=40,
+        validators=[MinValueValidator(-100), MaxValueValidator(1000)],
+        help_text="øre/kWh. Negative priser betyder, at man får penge for at bruge strøm.",
+    )
+    incl_vat = models.BooleanField("grænsen er inkl. moms", default=True)
+    min_hours = models.PositiveSmallIntegerField("varighed", choices=HOURS_CHOICES, default=1)
+
+    class Meta:
+        verbose_name = "prisbesked"
+        verbose_name_plural = "prisbeskeder"
+
+    def __str__(self):
+        return f"{self.user} ({'til' if self.enabled else 'fra'}, {self.area} < {self.threshold_ore})"
+
+
+class AlertLog(models.Model):
+    """Husker, at en dag er vurderet for en bruger, så der højst sendes én besked pr. dag."""
+
+    user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name="alert_logs")
+    date = models.DateField()
+    sent = models.BooleanField(default=False)
+    created = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        constraints = [models.UniqueConstraint(fields=["user", "date"], name="unique_alertlog_user_date")]
+        verbose_name = "beskedlog"
+        verbose_name_plural = "beskedlog"
+
+    def __str__(self):
+        return f"{self.user} {self.date} ({'sendt' if self.sent else 'ingen billige perioder'})"

@@ -1,16 +1,19 @@
 from datetime import date, timedelta
 
 from django.contrib import messages
+from django.core.mail import EmailMessage
 from django.contrib.auth.decorators import login_required, user_passes_test
 from django.http import JsonResponse
 from django.shortcuts import redirect, render
-from django.utils import timezone
+from django.utils import dateformat, timezone
 from django.views.decorators.cache import cache_control
 from django.views.decorators.http import require_GET, require_POST
 
+from . import alerts as alert_logic
 from . import analysis
+from .forms import AlertForm
 from .client import VALID_AREAS, EnergiDataError
-from .models import FetchRun, SpotPrice
+from .models import CheapPowerAlert, FetchRun, SpotPrice
 from .service import DK_TZ, local_today, update_prices
 
 STALE_AFTER = timedelta(hours=26)
@@ -152,6 +155,7 @@ def api_profile(request):
 
 
 def index(request):
+    alert = CheapPowerAlert.objects.filter(user=request.user).first() if request.user.is_authenticated else None
     run = last_success()
     latest = FetchRun.objects.order_by("-started").first()
     stale = run is None or timezone.now() - run.finished > STALE_AFTER
@@ -161,6 +165,7 @@ def index(request):
         "last_success": run,
         "stale": stale,
         "last_failed": latest if latest and not latest.ok else None,
+        "alert": alert if alert and alert.enabled else None,
     }
     return render(request, "elpriser/index.html", context)
 
@@ -179,3 +184,61 @@ def refresh(request):
     else:
         messages.success(request, f"Priser opdateret: {result.rows_new} nye og {result.rows_updated} opdaterede rækker.")
     return redirect("elpriser:index")
+
+
+# --- Besked når strømmen er billig ------------------------------------------------------------
+
+
+def alert_preview(alert):
+    """Hvornår ville brugeren have fået besked de seneste dage (og i morgen)? Hjælper med at vælge en grænse."""
+    today = local_today()
+    days = []
+    for offset in range(-6, 2):
+        day = today + timedelta(days=offset)
+        periods, ready = alert_logic.day_periods(alert, day)
+        if not ready:
+            continue
+        label = "I dag" if offset == 0 else "I morgen" if offset == 1 else dateformat.format(day, "D d/m")  # dansk ugedag
+        days.append({"date": day, "label": label, "periods": periods})
+    first, _ = analysis.day_bounds(today - timedelta(days=29))
+    prices = list(SpotPrice.objects.filter(area=alert.area, time__gte=first).values_list("price_dkk_mwh", flat=True))
+    share = None
+    if prices:
+        cheap = sum(1 for p in prices if analysis.to_ore_kwh(p, alert.incl_vat) <= float(alert.threshold_ore))
+        share = round(100 * cheap / len(prices))
+    return {"days": days, "share": share}
+
+
+@login_required
+def alerts(request):
+    alert = CheapPowerAlert.objects.get_or_create(user=request.user)[0]
+    if request.method == "POST":
+        form = AlertForm(request.POST, instance=alert, user=request.user)
+        if form.is_valid():
+            form.save()
+            messages.success(request, "Indstillingerne er gemt.")
+            return redirect("elpriser:alerts")
+        status = 400
+    else:
+        form, status = AlertForm(instance=alert, user=request.user), 200
+    context = {"form": form, "preview": alert_preview(alert), "alert": alert}
+    return render(request, "elpriser/alerts.html", context, status=status)
+
+
+@login_required
+@require_POST
+def alerts_test(request):
+    """Sender en testmail til brugerens egen adresse, så man kan se, at mailopsætningen virker."""
+    if not request.user.email:
+        messages.error(request, "Gem først en e-mailadresse.")
+    else:
+        try:
+            EmailMessage(
+                "Testmail fra elpriserne",
+                "Hvis du kan læse denne mail, virker beskeder om billig strøm.",
+                to=[request.user.email],
+            ).send()
+            messages.success(request, f"Testmail sendt til {request.user.email}.")
+        except Exception:
+            messages.error(request, "Mailen kunne ikke sendes. Tjek mailopsætningen på serveren.")
+    return redirect("elpriser:alerts")

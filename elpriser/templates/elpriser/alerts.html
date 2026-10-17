@@ -1,0 +1,97 @@
+{% extends "base.html" %}
+
+{% block title %}Besked om billig strøm{% endblock %}
+
+{% block content %}
+<nav aria-label="Sti">
+  <ol class="breadcrumb">
+    <li class="breadcrumb-item"><a href="{% url 'elpriser:index' %}">Elpriser</a></li>
+    <li class="breadcrumb-item active" aria-current="page">Besked</li>
+  </ol>
+</nav>
+
+<div class="row g-4">
+  <div class="col-lg-6">
+    <h1 class="mb-3"><i class="bi bi-bell me-2"></i>Besked om billig strøm</h1>
+    <p class="text-body-secondary">
+      Få en e-mail, når næste døgns priser er ude, og der er en billig periode. Du får højst én besked pr. dag, og kun hvis der er noget billigt.
+    </p>
+    <form method="post" novalidate>
+      {% csrf_token %}
+      {% if form.non_field_errors %}<div class="alert alert-danger">{{ form.non_field_errors|join:" " }}</div>{% endif %}
+      <div class="form-check form-switch mb-3">
+        {{ form.enabled }}
+        <label class="form-check-label" for="{{ form.enabled.id_for_label }}">{{ form.enabled.label }}</label>
+      </div>
+      <div class="mb-3">
+        <label for="{{ form.area.id_for_label }}" class="form-label">{{ form.area.label }}</label>
+        {{ form.area }}
+        <div class="form-text">DK1 er vest for Storebælt (Jylland og Fyn), DK2 er øst for (Sjælland, Lolland-Falster og Bornholm).</div>
+      </div>
+      <div class="row g-3 mb-3">
+        <div class="col-sm-6">
+          <label for="{{ form.threshold_ore.id_for_label }}" class="form-label">{{ form.threshold_ore.label }}</label>
+          <div class="input-group">{{ form.threshold_ore }}<span class="input-group-text">øre/kWh</span></div>
+          {% for error in form.threshold_ore.errors %}<div class="text-danger small mt-1">{{ error }}</div>{% endfor %}
+        </div>
+        <div class="col-sm-6">
+          <label for="{{ form.min_hours.id_for_label }}" class="form-label">{{ form.min_hours.label }}</label>
+          {{ form.min_hours }}
+        </div>
+      </div>
+      <div class="form-check mb-1">
+        {{ form.incl_vat }}
+        <label class="form-check-label" for="{{ form.incl_vat.id_for_label }}">{{ form.incl_vat.label }}</label>
+      </div>
+      <div class="form-text mb-3">Der sammenlignes med spotprisen (uden nettarif og afgifter). Med moms lægges 25 % oven på.</div>
+      <div class="mb-4">
+        <label for="{{ form.email.id_for_label }}" class="form-label">{{ form.email.label }}</label>
+        {{ form.email }}
+        {% for error in form.email.errors %}<div class="text-danger small mt-1">{{ error }}</div>{% endfor %}
+        <div class="form-text">{{ form.email.help_text }}</div>
+      </div>
+      <div class="d-flex gap-2">
+        <button type="submit" class="btn btn-primary">Gem</button>
+        <a href="{% url 'elpriser:index' %}" class="btn btn-outline-secondary">Tilbage</a>
+      </div>
+    </form>
+    {% if user.email %}
+      <hr class="my-4">
+      <form method="post" action="{% url 'elpriser:alerts_test' %}" class="d-flex align-items-center gap-3">
+        {% csrf_token %}
+        <button type="submit" class="btn btn-outline-secondary btn-sm"><i class="bi bi-send me-1"></i>Send testmail</button>
+        <span class="small text-body-secondary">til {{ user.email }}</span>
+      </form>
+    {% endif %}
+  </div>
+
+  <div class="col-lg-6">
+    <div class="card">
+      <div class="card-header">Hvornår ville du have fået besked?</div>
+      <div class="card-body">
+        <p class="small text-body-secondary">
+          Efter dine gemte indstillinger ({{ alert.area }}, under {{ alert.threshold_ore|floatformat:"-1" }} øre/kWh{% if alert.incl_vat %} inkl. moms{% endif %}, {{ alert.get_min_hours_display }}).
+          {% if preview.share is not None %}De seneste 30 dage var prisen under grænsen i <strong>{{ preview.share }} %</strong> af tiden.{% endif %}
+        </p>
+        {% for day in preview.days %}
+          <div class="d-flex gap-3 py-2 border-top">
+            <div class="fw-semibold" style="min-width: 5.5rem">{{ day.label }}</div>
+            <div class="flex-grow-1">
+              {% for p in day.periods %}
+                <div>
+                  kl. {{ p.start|time:"H:i" }}–{{ p.end|time:"H:i" }}
+                  <span class="text-body-secondary small">· gns. {{ p.avg|floatformat:1 }} øre/kWh</span>
+                </div>
+              {% empty %}
+                <span class="text-body-secondary">Ingen billige perioder</span>
+              {% endfor %}
+            </div>
+          </div>
+        {% empty %}
+          <div class="alert alert-secondary mb-0">Der er ingen priser i databasen endnu, så der kan ikke vises noget eksempel.</div>
+        {% endfor %}
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}
